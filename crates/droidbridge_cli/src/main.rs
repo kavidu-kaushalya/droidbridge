@@ -1,5 +1,4 @@
 mod window;
-mod whatsapp_activity;
 mod dynamic_renderer;
 
 use std::env;
@@ -24,7 +23,6 @@ fn print_usage() {
     println!("  uninstall <pkg_name>     Uninstall an application and remove its sandboxed storage");
     println!("  list-apps                List all installed Android applications in DroidBridge");
     println!("  run <path.apk | pkg>     Launch Android APK as an interactive native Windows window");
-    println!("  whatsapp                 Directly launch WhatsApp Activity window on Windows Desktop");
     println!("  render-layout <apk> <target>  Render real Android layout directly into interactive Windows Desktop Window");
     println!("  inflate-layout <apk> <target> Inflate real Android Binary Layout XML (res/layout/.. or 0x7f..)");
     println!("  resolve-res <apk> <query>Resolve resource by ID (0x7f...) or type/name (string/app_name)");
@@ -599,16 +597,8 @@ fn cmd_run(target: &str) {
     let view_tree_res = thread.launch_activity(&activity_name, &apk);
 
     println!("\n[*] Step 3: Bridging Activity to native Win32 Desktop Window...");
-    let is_whatsapp = pkg_name.contains("whatsapp") || target.to_lowercase().contains("whatsapp") || apk_path.to_lowercase().contains("whatsapp");
-
-    if is_whatsapp {
-        println!("    [UI Engine] Specializing Activity Window for WhatsApp Messenger...");
-        let version = apk.manifest.version_name.clone().unwrap_or_else(|| "2.26.41.71".to_string());
-        if let Err(e) = whatsapp_activity::run_whatsapp_window(&pkg_name, &version) {
-            eprintln!("[-] WhatsApp Window Error: {}", e);
-        }
-    } else if let Ok(view_tree) = view_tree_res {
-        println!("    [UI Engine] Launching Dynamic Layout Native Desktop Window...");
+    if let Ok(view_tree) = view_tree_res {
+        println!("    [UI Engine] Launching Real Android View Hierarchy Desktop Window...");
         if let Err(e) = dynamic_renderer::run_dynamic_layout_window(&app_label, view_tree) {
             eprintln!("[-] Dynamic Layout Window Error: {}", e);
         }
@@ -649,13 +639,6 @@ fn main() {
         }
         "list-apps" | "apps" | "list" => {
             cmd_list_apps();
-        }
-        "whatsapp" => {
-            println!("{}", BANNER);
-            println!("[*] Launching WhatsApp Activity window directly on Windows Desktop...");
-            if let Err(e) = whatsapp_activity::run_whatsapp_window("com.whatsapp", "2.26.41.71") {
-                eprintln!("[-] Error: {}", e);
-            }
         }
         "run" => {
             if args.len() < 3 {
