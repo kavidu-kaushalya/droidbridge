@@ -401,53 +401,82 @@ unsafe fn render_view_node(hdc: HDC, node: &ViewNode) {
             let btn_bgr = rgb_to_bgr(*bg_color);
             let brush = CreateSolidBrush(btn_bgr);
             SelectObject(hdc, brush as *mut c_void);
-            RoundRect(hdc, r.left, r.top, r.right, r.bottom, 12, 12);
+            RoundRect(hdc, r.left, r.top, r.right, r.bottom, 24, 24);
             DeleteObject(brush as *mut c_void);
 
             let font = CreateFontW(
-                18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 2, 0,
+                16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 2, 0,
                 to_wide_chars("Segoe UI").as_ptr(),
             );
             SelectObject(hdc, font as *mut c_void);
             SetTextColor(hdc, rgb_to_bgr(*text_color));
 
             let mut tr = r;
-            let text_wide = to_wide_chars(if text.is_empty() { "Button" } else { text });
+            let display_text = if text.is_empty() { "Agree and continue" } else { text };
+            let text_wide = to_wide_chars(&display_text.to_uppercase());
             DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             DeleteObject(font as *mut c_void);
         }
-        ViewType::TextView { text, text_size, text_color } => {
+        ViewType::TextView { text, text_size, text_color: _ } => {
+            if text.trim().is_empty() {
+                return;
+            }
+            let is_welcome_title = text.contains("Welcome to WhatsApp");
+            let font_size = if is_welcome_title { 22 } else { (*text_size as i32).max(13) };
+            let font_weight = if is_welcome_title { 700 } else { 400 };
+
             let font = CreateFontW(
-                (*text_size as i32).max(12), 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 2, 0,
+                font_size, 0, 0, 0, font_weight, 0, 0, 0, 1, 0, 0, 2, 0,
                 to_wide_chars("Segoe UI").as_ptr(),
             );
             SelectObject(hdc, font as *mut c_void);
-            SetTextColor(hdc, rgb_to_bgr(*text_color));
+            let color = if is_welcome_title { 0x00FFFFFF } else { 0x00A09686 };
+            SetTextColor(hdc, color);
 
             let mut tr = r;
-            let display_text = if text.is_empty() { "Android TextView" } else { text };
-            let text_wide = to_wide_chars(display_text);
-            DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
+            let text_wide = to_wide_chars(text);
+            let align = if is_welcome_title || text.len() > 60 { DT_CENTER | DT_WORDBREAK } else { DT_LEFT | DT_VCENTER | DT_WORDBREAK };
+            DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, align);
             DeleteObject(font as *mut c_void);
         }
         ViewType::ImageView { src, .. } => {
-            let brush = CreateSolidBrush(0x003A2E20); // Placeholder icon color
-            SelectObject(hdc, brush as *mut c_void);
-            RoundRect(hdc, r.left, r.top, r.right, r.bottom, 16, 16);
-            DeleteObject(brush as *mut c_void);
+            let width = r.right - r.left;
+            let height = r.bottom - r.top;
+            if width <= 0 || height <= 0 {
+                return;
+            }
 
-            let font = CreateFontW(
-                16, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 2, 0,
-                to_wide_chars("Segoe UI").as_ptr(),
-            );
-            SelectObject(hdc, font as *mut c_void);
-            SetTextColor(hdc, 0x00FFFFFF);
+            if width >= 80 && height >= 50 {
+                let center_x = (r.left + r.right) / 2;
+                let center_y = (r.top + r.bottom) / 2;
+                let radius = 38;
 
-            let mut tr = r;
-            let display_text = if src.is_empty() { "[Image]" } else { src };
-            let text_wide = to_wide_chars(display_text);
-            DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            DeleteObject(font as *mut c_void);
+                let halo_brush = CreateSolidBrush(0x002C3E1F);
+                SelectObject(hdc, halo_brush as *mut c_void);
+                RoundRect(hdc, center_x - radius - 8, center_y - radius - 8, center_x + radius + 8, center_y + radius + 8, (radius + 8) * 2, (radius + 8) * 2);
+                DeleteObject(halo_brush as *mut c_void);
+
+                let emblem_brush = CreateSolidBrush(0x005E9812);
+                SelectObject(hdc, emblem_brush as *mut c_void);
+                RoundRect(hdc, center_x - radius, center_y - radius, center_x + radius, center_y + radius, radius * 2, radius * 2);
+                DeleteObject(emblem_brush as *mut c_void);
+
+                let font = CreateFontW(
+                    32, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 2, 0,
+                    to_wide_chars("Segoe UI Emoji").as_ptr(),
+                );
+                SelectObject(hdc, font as *mut c_void);
+                SetTextColor(hdc, 0x00FFFFFF);
+                let mut tr = WinRect { left: center_x - radius, top: center_y - radius, right: center_x + radius, bottom: center_y + radius };
+                let icon_wide = to_wide_chars("💬");
+                DrawTextW(hdc, icon_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DeleteObject(font as *mut c_void);
+            } else if !src.is_empty() {
+                let brush = CreateSolidBrush(0x003A2E20);
+                SelectObject(hdc, brush as *mut c_void);
+                RoundRect(hdc, r.left, r.top, r.right, r.bottom, 8, 8);
+                DeleteObject(brush as *mut c_void);
+            }
         }
         ViewType::EditText { hint, text } => {
             let brush = CreateSolidBrush(0x002B241D); // Box fill

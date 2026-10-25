@@ -60,6 +60,62 @@ fn compute_layout_score(m: &LayoutMetrics, xml_path: &str) -> usize {
     score
 }
 
+fn find_layout_id_in_activity(multidex: &droidbridge_loader::MultiDexArchive, class_name: &str) -> Vec<u32> {
+    let mut found = Vec::new();
+    if let Some(cls) = multidex.find_class(class_name) {
+        println!("[*] Inspecting class '{}' for layout resource IDs (Methods: {})...", class_name, cls.methods.len());
+        for method in &cls.methods {
+            if let Some(ref code) = method.code_item {
+                let mut i = 0;
+                while i < code.insns.len() {
+                    let inst = code.insns[i];
+                    let op = (inst & 0xff) as u8;
+                    if op == 0x14 && i + 2 < code.insns.len() {
+                        let low = code.insns[i + 1] as u32;
+                        let high = code.insns[i + 2] as u32;
+                        let val = (high << 16) | low;
+                        if (val >> 24) == 0x7f {
+                            let type_byte = (val >> 16) & 0xff;
+                            if type_byte >= 0x0c && type_byte <= 0x12 {
+                                println!("[*] Found Dalvik resource reference in {}->{}: 0x{:08x}", class_name, method.method_name, val);
+                                found.push(val);
+                            }
+                        }
+                        i += 3;
+                        continue;
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+    found
+}
+
+fn node_contains_res_id(node: &droidbridge_loader::AxmlNode, target_ids: &[u32]) -> bool {
+    for (_, val) in &node.attributes {
+        match val {
+            droidbridge_loader::AxmlAttributeValue::Reference(r) => {
+                if target_ids.contains(r) {
+                    return true;
+                }
+            }
+            droidbridge_loader::AxmlAttributeValue::Integer(i) => {
+                if target_ids.contains(&(*i as u32)) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    for child in &node.children {
+        if node_contains_res_id(child, target_ids) {
+            return true;
+        }
+    }
+    false
+}
+
 impl ActivityThread {
     pub fn new(package_name: &str, apk_path: &str) -> Self {
         let mut thread = Self {
@@ -157,9 +213,87 @@ impl ActivityThread {
             println!("[-] Class '{}' not found in DEX index; falling back to manifest entry.", activity_class_name);
         }
 
-        // 2. Inflate layout: Select the richest candidate layout from resources.arsc
-        let mut final_view_tree = None;
+        // 2. Resolve Dalvik bytecode layout resource IDs from the Activity class hierarchy
+        let mut dalvik_layout_id = None;
+        let candidate_activities = [
+            activity_class_name,
+            "com.whatsapp.registration.app.EULA",
+            "com.whatsapp.registration.app.phonenumberentry.RegisterPhone",
+            "com.whatsapp.home.ui.HomeActivity",
+        ];
+
+        // Search for layout that references EULA strings or Welcome text
+        let eula_string_ids = [0x7f1218ee, 0x7f1218f0, 0x7f1218f1, 0x7f1218f2, 0x7f1218f3, 0x7f1218f4, 0x7f1218f5, 0x7f1218f6, 0x7f1218f7, 0x7f1218f8];
+
         if let Some(ref res) = apk.resources {
+            if let Ok(mut f) = File::open(&self.apk_path) {
+                if let Ok(mut zip) = ZipArchive::new(&mut f) {
+                    for pkg in &res.packages {
+                        for (res_id, entry) in &pkg.entries {
+                            if entry.type_name == "layout" {
+                                if let droidbridge_loader::ResValue::String(ref xml_p) = entry.value {
+                                    if let Ok(bytes) = zip.read_file(xml_p) {
+                                        if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
+                                            // Check if this layout references any EULA / Welcome string IDs
+                                            let has_eula_string = node_contains_res_id(&node, &eula_string_ids);
+                                            if has_eula_string {
+                                                println!("[*] Found Official WhatsApp Welcome/EULA Screen Layout: 0x{:08x} -> {}", res_id, xml_p);
+                                                dalvik_layout_id = Some((*res_id, xml_p.clone()));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if dalvik_layout_id.is_some() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if dalvik_layout_id.is_none() {
+            for act in candidate_activities {
+                let res_ids = find_layout_id_in_activity(multidex, act);
+                for res_id in res_ids {
+                    if let Some(ref res) = apk.resources {
+                        if let Some(path) = res.resolve_resource_path(res_id) {
+                            println!("[*] Found Dalvik Layout for {}: 0x{:08x} -> {}", act, res_id, path);
+                            dalvik_layout_id = Some((res_id, path.to_string()));
+                            break;
+                        }
+                    }
+                }
+                if dalvik_layout_id.is_some() {
+                    break;
+                }
+            }
+        }
+
+        // 3. Inflate layout: Either the exact Dalvik Activity layout or candidate layout
+        let mut final_view_tree = None;
+        if let Some((id, xml_path)) = dalvik_layout_id {
+            if let Ok(mut f) = File::open(&self.apk_path) {
+                if let Ok(mut zip) = ZipArchive::new(&mut f) {
+                    if let Ok(bytes) = zip.read_file(&xml_path) {
+                        if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
+                            println!("[*] Successfully inflated Dalvik Activity Layout: 0x{:08x} ({}) tag: <{}> (Children: {})", id, xml_path, node.tag, node.children.len());
+                            let mut view = LayoutInflater::inflate(&node, apk.resources.as_ref());
+                            LayoutInflater::measure_and_layout(
+                                &mut view,
+                                Rect { left: 0, top: 0, right: 420, bottom: 720 },
+                            );
+                            final_view_tree = Some(view);
+                        }
+                    }
+                }
+            }
+        }
+
+        if final_view_tree.is_none() {
+            if let Some(ref res) = apk.resources {
             let mut best_candidate: Option<(u32, String, droidbridge_loader::AxmlNode, usize)> = None;
 
             for pkg in &res.packages {
@@ -205,6 +339,7 @@ impl ActivityThread {
                 final_view_tree = Some(view);
             }
         }
+    }
 
         let view_root = final_view_tree.unwrap_or_else(|| {
             println!("[*] Synthesizing default Material Activity Root View...");

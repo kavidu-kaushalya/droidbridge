@@ -158,9 +158,24 @@ impl LayoutInflater {
             let bg_color = Self::resolve_color(&root.attributes, "background", resources).unwrap_or(0xff25d366); // WhatsApp Green #25D366
             let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
             ViewType::Button { text, bg_color, text_color }
-        } else if tag == "TextView" || tag.ends_with("TextView") {
-            let text = Self::resolve_text(&root.attributes, "text", resources);
-            let text_size = Self::resolve_float(&root.attributes, "textSize").unwrap_or(15.0);
+        } else if tag == "TextView" || tag.ends_with("TextView") || tag.ends_with("Label") || tag.ends_with(".TextEmojiLabel") {
+            let mut text = Self::resolve_text(&root.attributes, "text", resources);
+            if text.is_empty() {
+                text = Self::resolve_text(&root.attributes, "hint", resources);
+            }
+            if text.is_empty() {
+                text = Self::resolve_text(&root.attributes, "title", resources);
+            }
+            if text.contains('<') && text.contains('>') {
+                text = text.replace("<a href=\"manage-data\">", "")
+                    .replace("<a href=\"terms-of-service\">", "")
+                    .replace("<a href=\"privacy-policy\">", "")
+                    .replace("</a>", "");
+            }
+            let mut text_size = Self::resolve_float(&root.attributes, "textSize").unwrap_or(15.0);
+            if text_size < 13.0 {
+                text_size = if text.contains("Welcome") { 22.0 } else { 14.0 };
+            }
             let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
             ViewType::TextView { text, text_size, text_color }
         } else if tag == "ImageView" || tag.ends_with("ImageView") {
@@ -349,24 +364,47 @@ impl LayoutInflater {
                         let h = match child.layout_params.height {
                             SizeRule::Exact(px) => px,
                             SizeRule::MatchParent => total_available_h / (count as i32),
-                            SizeRule::WrapContent => 48, // default Android item height
+                            SizeRule::WrapContent => {
+                                if child.children.is_empty() {
+                                    match &child.view_type {
+                                        ViewType::Button { .. } => 50,
+                                        ViewType::TextView { text, .. } => if text.trim().is_empty() { 0 } else { 36 },
+                                        ViewType::EditText { .. } => 48,
+                                        ViewType::ImageView { .. } => 60,
+                                        _ => 36,
+                                    }
+                                } else {
+                                    let mut sub_h = 0;
+                                    for sub in &child.children {
+                                        sub_h += match sub.layout_params.height {
+                                            SizeRule::Exact(p) => p,
+                                            _ => match &sub.view_type {
+                                                ViewType::Button { .. } => 50,
+                                                ViewType::TextView { text, .. } => if text.trim().is_empty() { 0 } else { 36 },
+                                                ViewType::EditText { .. } => 48,
+                                                _ => 36,
+                                            },
+                                        } + sub.layout_params.margin.top + sub.layout_params.margin.bottom + 4;
+                                    }
+                                    sub_h.max(36)
+                                }
+                            }
                         };
 
                         let w = match child.layout_params.width {
                             SizeRule::Exact(px) => px,
-                            SizeRule::MatchParent => inner_right - inner_left,
-                            SizeRule::WrapContent => (inner_right - inner_left).min(200),
+                            _ => (inner_right - inner_left).max(0),
                         };
 
                         let child_rect = Rect {
                             left: inner_left + child.layout_params.margin.left,
                             top: current_y + child.layout_params.margin.top,
-                            right: inner_left + w - child.layout_params.margin.right,
-                            bottom: current_y + h - child.layout_params.margin.bottom,
+                            right: (inner_left + w - child.layout_params.margin.right).max(inner_left),
+                            bottom: (current_y + h - child.layout_params.margin.bottom).max(current_y),
                         };
 
                         Self::measure_and_layout(child, child_rect);
-                        current_y += h + child.layout_params.margin.top + child.layout_params.margin.bottom;
+                        current_y += h + child.layout_params.margin.top + child.layout_params.margin.bottom + 6;
                     }
                 } else {
                     let total_available_w = (inner_right - inner_left).max(0);
