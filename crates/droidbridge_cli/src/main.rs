@@ -21,6 +21,7 @@ fn print_usage() {
     println!("  calculator               Directly launch the interactive Android Calculator (com.android.calculator2)");
     println!("  run <path.apk>           Launch Android APK as an interactive native Windows window");
     println!("  inspect <path.apk>       Inspect APK contents, manifest, DEX, and compatibility");
+    println!("  inspect-elf <path.so>    Inspect Android ELF64 native library (.so), headers & JNI symbols");
     println!("  parse-dex <path.dex>     Parse and dump DEX header, classes, and method signatures");
     println!("  exec-test                Run verified Dalvik bytecode execution test on native host");
     println!("  generate-fixture <out>   Generate a minimal compliant test APK for verification");
@@ -320,6 +321,57 @@ fn cmd_exec_test() {
     }
 }
 
+fn cmd_inspect_elf(path: &str) {
+    println!("{}", BANNER);
+    println!("[*] Inspecting Android ELF Native Library (.so): {}", path);
+
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[-] Error reading file '{}': {}", path, e);
+            return;
+        }
+    };
+
+    let elf = match droidbridge_native::ElfFile::parse(&bytes) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[-] Failed to parse ELF file: {}", e);
+            return;
+        }
+    };
+
+    let arch_name = match elf.machine {
+        droidbridge_native::EM_X86_64 => "x86_64 (AMD64 - Supported natively on Windows x64)",
+        droidbridge_native::EM_AARCH64 => "ARM64 (aarch64 - Requires DBT instruction translation)",
+        _ => "Other / Unknown architecture",
+    };
+
+    println!("\n===============================================================");
+    println!("  ELF64 HEADER & ARCHITECTURE");
+    println!("===============================================================");
+    println!("  Machine:             0x{:04x} ({})", elf.machine, arch_name);
+    println!("  Entry Address:       0x{:016x}", elf.entry);
+    println!("  Program Headers:     {}", elf.program_headers.len());
+    println!("  Dynamic Relocations: {}", elf.relocations.len());
+
+    println!("\n===============================================================");
+    println!("  NEEDED BIONIC DEPENDENCIES (DT_NEEDED: {})", elf.needed_libraries.len());
+    println!("===============================================================");
+    for lib in &elf.needed_libraries {
+        println!("  - {}", lib);
+    }
+
+    println!("\n===============================================================");
+    println!("  EXPORTED JNI & NATIVE SYMBOLS");
+    println!("===============================================================");
+    let jni_syms: Vec<_> = elf.symbols.iter().filter(|s| !s.name.is_empty() && (s.name.starts_with("Java_") || s.name.contains("JNI_"))).collect();
+    println!("  Total JNI Exports Found: {}", jni_syms.len());
+    for sym in jni_syms.iter().take(20) {
+        println!("  [0x{:08x}] {}", sym.value, sym.name);
+    }
+}
+
 fn cmd_parse_dex(path: &str) {
     println!("{}", BANNER);
     println!("[*] Reading DEX file: {}", path);
@@ -521,6 +573,13 @@ fn main() {
                 return;
             }
             cmd_inspect(&args[2]);
+        }
+        "inspect-elf" => {
+            if args.len() < 3 {
+                eprintln!("Error: Missing .so path for 'inspect-elf' command.\nUsage: droidbridge inspect-elf <path.so>");
+                return;
+            }
+            cmd_inspect_elf(&args[2]);
         }
         "parse-dex" => {
             if args.len() < 3 {

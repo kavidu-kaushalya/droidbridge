@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 droidbridge_loader = { path = "../droidbridge_loader" }
 droidbridge_core = { path = "../droidbridge_core" }
+droidbridge_framework = { path = "../droidbridge_framework" }
+droidbridge_native = { path = "../droidbridge_native" }

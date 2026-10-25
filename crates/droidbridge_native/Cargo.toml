@@ -1,0 +1,9 @@
+[package]
+name = "droidbridge_native"
+version = "0.1.0"
+edition = "2021"
+authors = ["DroidBridge Systems Engineering Group"]
+description = "Android ELF64 .so loader, Bionic libc shim, and JNI bridge for DroidBridge"
+
+[dependencies]
+droidbridge_core = { path = "../droidbridge_core" }

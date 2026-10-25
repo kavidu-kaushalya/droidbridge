@@ -13,7 +13,9 @@ name = "droidbridge_cli"
 version = "0.1.0"
 dependencies = [
  "droidbridge_core",
+ "droidbridge_framework",
  "droidbridge_loader",
+ "droidbridge_native",
 ]
 
 [[package]]
@@ -21,10 +23,21 @@ name = "droidbridge_core"
 version = "0.1.0"
 
 [[package]]
+name = "droidbridge_framework"
+version = "0.1.0"
+
+[[package]]
 name = "droidbridge_loader"
 version = "0.1.0"
 dependencies = [
  "miniz_oxide",
+]
+
+[[package]]
+name = "droidbridge_native"
+version = "0.1.0"
+dependencies = [
+ "droidbridge_core",
 ]
 
 [[package]]

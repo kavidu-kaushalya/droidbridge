@@ -1,0 +1,8 @@
+[package]
+name = "droidbridge_framework"
+version = "0.1.0"
+edition = "2021"
+authors = ["DroidBridge Systems Engineering Group"]
+description = "Android Framework API compatibility layer (Context, Activity, Intent, SharedPreferences, Bundle, Log) for DroidBridge"
+
+[dependencies]
