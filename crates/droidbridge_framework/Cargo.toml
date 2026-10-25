@@ -6,3 +6,4 @@ authors = ["DroidBridge Systems Engineering Group"]
 description = "Android Framework API compatibility layer (Context, Activity, Intent, SharedPreferences, Bundle, Log) for DroidBridge"
 
 [dependencies]
+droidbridge_loader = { path = "../droidbridge_loader" }

@@ -14,6 +14,7 @@ version = "0.1.0"
 dependencies = [
  "droidbridge_core",
  "droidbridge_framework",
+ "droidbridge_installer",
  "droidbridge_loader",
  "droidbridge_native",
 ]
@@ -25,6 +26,17 @@ version = "0.1.0"
 [[package]]
 name = "droidbridge_framework"
 version = "0.1.0"
+dependencies = [
+ "droidbridge_loader",
+]
+
+[[package]]
+name = "droidbridge_installer"
+version = "0.1.0"
+dependencies = [
+ "droidbridge_framework",
+ "droidbridge_loader",
+]
 
 [[package]]
 name = "droidbridge_loader"

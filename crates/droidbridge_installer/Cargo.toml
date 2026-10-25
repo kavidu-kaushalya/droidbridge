@@ -1,0 +1,10 @@
+[package]
+name = "droidbridge_installer"
+version = "0.1.0"
+edition = "2021"
+authors = ["DroidBridge Systems Engineering Group"]
+description = "APK installer, app manager, sandboxed storage isolation, and app registry for DroidBridge"
+
+[dependencies]
+droidbridge_loader = { path = "../droidbridge_loader" }
+droidbridge_framework = { path = "../droidbridge_framework" }

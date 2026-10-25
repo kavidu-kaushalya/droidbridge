@@ -2,15 +2,59 @@ pub mod bundle;
 pub mod intent;
 pub mod logger;
 pub mod shared_prefs;
+pub mod view;
 
 pub use bundle::{Bundle, BundleValue};
 pub use intent::Intent;
 pub use logger::{Log, LogPriority};
 pub use shared_prefs::{Editor, PrefValue, SharedPreferences};
+pub use view::{Insets, LayoutInflater, LayoutParams, Orientation, Rect, SizeRule, ViewNode, ViewType};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use droidbridge_loader::{AxmlAttributeValue, AxmlNode};
+
+    #[test]
+    fn test_layout_inflation_and_measure() {
+        let mut root_axml = AxmlNode {
+            tag: "LinearLayout".to_string(),
+            attributes: HashMap::new(),
+            children: Vec::new(),
+        };
+        root_axml.attributes.insert("orientation".to_string(), AxmlAttributeValue::String("vertical".to_string()));
+        root_axml.attributes.insert("layout_width".to_string(), AxmlAttributeValue::String("match_parent".to_string()));
+        root_axml.attributes.insert("layout_height".to_string(), AxmlAttributeValue::String("match_parent".to_string()));
+
+        let mut btn_axml = AxmlNode {
+            tag: "Button".to_string(),
+            attributes: HashMap::new(),
+            children: Vec::new(),
+        };
+        btn_axml.attributes.insert("text".to_string(), AxmlAttributeValue::String("Submit".to_string()));
+        btn_axml.attributes.insert("layout_width".to_string(), AxmlAttributeValue::String("match_parent".to_string()));
+        btn_axml.attributes.insert("layout_height".to_string(), AxmlAttributeValue::Integer(50));
+
+        root_axml.children.push(btn_axml);
+
+        let mut inflated = LayoutInflater::inflate(&root_axml, None);
+        assert_eq!(inflated.children.len(), 1);
+        if let ViewType::Button { ref text, .. } = inflated.children[0].view_type {
+            assert_eq!(text, "Submit");
+        } else {
+            panic!("Child should be Button");
+        }
+
+        // Measure & Layout
+        let window_rect = Rect { left: 0, top: 0, right: 400, bottom: 600 };
+        LayoutInflater::measure_and_layout(&mut inflated, window_rect);
+
+        assert_eq!(inflated.bounds.width(), 400);
+        assert_eq!(inflated.bounds.height(), 600);
+        assert_eq!(inflated.children[0].bounds.width(), 400);
+        assert_eq!(inflated.children[0].bounds.height(), 50);
+    }
 
     #[test]
     fn test_bundle_operations() {

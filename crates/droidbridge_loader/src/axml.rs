@@ -23,6 +23,24 @@ impl std::fmt::Display for AxmlError {
 
 impl std::error::Error for AxmlError {}
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AxmlAttributeValue {
+    String(String),
+    Reference(u32),
+    Color(u32),
+    Boolean(bool),
+    Dimension(f32, String),
+    Integer(i32),
+    Raw { data_type: u8, data: u32 },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AxmlNode {
+    pub tag: String,
+    pub attributes: HashMap<String, AxmlAttributeValue>,
+    pub children: Vec<AxmlNode>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ActivityManifestInfo {
     pub name: String,
@@ -245,6 +263,109 @@ impl<'a> AxmlDecoder<'a> {
         }
 
         Ok(manifest)
+    }
+
+    pub fn decode_tree(data: &'a [u8]) -> Result<AxmlNode, AxmlError> {
+        let mut decoder = Self {
+            data,
+            strings: Vec::new(),
+        };
+        decoder.parse_tree()
+    }
+
+    fn parse_tree(&mut self) -> Result<AxmlNode, AxmlError> {
+        if self.data.len() < 8 {
+            return Err(AxmlError::UnexpectedEof);
+        }
+
+        let root_type = Self::read_u16(self.data, 0)?;
+        if root_type != Self::RES_XML_TYPE {
+            return Err(AxmlError::InvalidChunkType(root_type));
+        }
+
+        let mut offset = 8;
+        let mut node_stack: Vec<AxmlNode> = Vec::new();
+        let mut root_node: Option<AxmlNode> = None;
+
+        while offset + 8 <= self.data.len() {
+            let chunk_type = Self::read_u16(self.data, offset)?;
+            let chunk_size = Self::read_u32(self.data, offset + 4)? as usize;
+
+            if chunk_size < 8 || offset + chunk_size > self.data.len() {
+                break;
+            }
+
+            match chunk_type {
+                Self::RES_STRING_POOL_TYPE => {
+                    self.parse_string_pool(&self.data[offset..offset + chunk_size])?;
+                }
+                Self::RES_XML_START_ELEMENT_TYPE => {
+                    let element_slice = &self.data[offset..offset + chunk_size];
+                    let name_idx = Self::read_u32(element_slice, 20)? as usize;
+                    let tag_name = self.get_string(name_idx).unwrap_or("unknown").to_string();
+
+                    let attr_count = Self::read_u16(element_slice, 28)? as usize;
+                    let attr_start = 36;
+
+                    let mut attributes = HashMap::new();
+                    for i in 0..attr_count {
+                        let a_off = attr_start + i * 20;
+                        if a_off + 20 <= element_slice.len() {
+                            let a_name_idx = Self::read_u32(element_slice, a_off + 4)? as usize;
+                            let a_raw_idx = Self::read_u32(element_slice, a_off + 8)? as i32;
+                            let a_type = element_slice[a_off + 15];
+                            let a_data = Self::read_u32(element_slice, a_off + 16)?;
+
+                            let attr_name = self.get_string(a_name_idx).unwrap_or("").to_string();
+                            let attr_val = if a_raw_idx >= 0 {
+                                AxmlAttributeValue::String(self.get_string(a_raw_idx as usize).unwrap_or("").to_string())
+                            } else {
+                                match a_type {
+                                    0x01 => AxmlAttributeValue::Reference(a_data),
+                                    0x03 => {
+                                        let s = self.get_string(a_data as usize).unwrap_or("").to_string();
+                                        AxmlAttributeValue::String(s)
+                                    }
+                                    0x10 | 0x11 => AxmlAttributeValue::Integer(a_data as i32),
+                                    0x12 => AxmlAttributeValue::Boolean(a_data != 0),
+                                    0x1c..=0x1f => AxmlAttributeValue::Color(a_data),
+                                    0x05 => {
+                                        let unit_idx = (a_data & 0x0f) as usize;
+                                        let units = ["px", "dp", "sp", "pt", "in", "mm"];
+                                        let unit = if unit_idx < units.len() { units[unit_idx] } else { "px" };
+                                        let val = ((a_data >> 8) as f32) / 256.0;
+                                        AxmlAttributeValue::Dimension(val, unit.to_string())
+                                    }
+                                    _ => AxmlAttributeValue::Raw { data_type: a_type, data: a_data },
+                                }
+                            };
+                            attributes.insert(attr_name, attr_val);
+                        }
+                    }
+
+                    let node = AxmlNode {
+                        tag: tag_name,
+                        attributes,
+                        children: Vec::new(),
+                    };
+                    node_stack.push(node);
+                }
+                Self::RES_XML_END_ELEMENT_TYPE => {
+                    if let Some(finished_node) = node_stack.pop() {
+                        if let Some(parent) = node_stack.last_mut() {
+                            parent.children.push(finished_node);
+                        } else {
+                            root_node = Some(finished_node);
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            offset += chunk_size;
+        }
+
+        root_node.ok_or(AxmlError::MalformedElement)
     }
 
     fn parse_string_pool(&mut self, chunk: &[u8]) -> Result<(), AxmlError> {

@@ -4,6 +4,7 @@ members = [
     "crates/droidbridge_core",
     "crates/droidbridge_framework",
     "crates/droidbridge_native",
+    "crates/droidbridge_installer",
     "crates/droidbridge_cli",
 ]
 resolver = "2"

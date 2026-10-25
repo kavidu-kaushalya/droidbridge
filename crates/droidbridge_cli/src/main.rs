@@ -1,11 +1,13 @@
-mod calculator;
 mod window;
+mod whatsapp_activity;
+mod dynamic_renderer;
 
 use std::env;
 use std::fs;
 use std::path::Path;
 use droidbridge_core::{DexVm, ExecutionResult, Value};
 use droidbridge_loader::{ApkPackage, DexFile};
+use droidbridge_installer::{AppRegistry, PackageInstaller};
 
 const BANNER: &str = r#"
  ===============================================================
@@ -18,258 +20,20 @@ fn print_usage() {
     println!("{}", BANNER);
     println!("Usage: droidbridge <command> [arguments]\n");
     println!("Commands:");
-    println!("  calculator               Directly launch the interactive Android Calculator (com.android.calculator2)");
-    println!("  run <path.apk>           Launch Android APK as an interactive native Windows window");
+    println!("  install <path.apk>       Install Android APK into DroidBridge sandboxed application storage");
+    println!("  uninstall <pkg_name>     Uninstall an application and remove its sandboxed storage");
+    println!("  list-apps                List all installed Android applications in DroidBridge");
+    println!("  run <path.apk | pkg>     Launch Android APK as an interactive native Windows window");
+    println!("  whatsapp                 Directly launch WhatsApp Activity window on Windows Desktop");
+    println!("  render-layout <apk> <target>  Render real Android layout directly into interactive Windows Desktop Window");
+    println!("  inflate-layout <apk> <target> Inflate real Android Binary Layout XML (res/layout/.. or 0x7f..)");
+    println!("  resolve-res <apk> <query>Resolve resource by ID (0x7f...) or type/name (string/app_name)");
     println!("  inspect <path.apk>       Inspect APK contents, manifest, DEX, and compatibility");
     println!("  inspect-elf <path.so>    Inspect Android ELF64 native library (.so), headers & JNI symbols");
     println!("  parse-dex <path.dex>     Parse and dump DEX header, classes, and method signatures");
     println!("  exec-test                Run verified Dalvik bytecode execution test on native host");
-    println!("  generate-fixture <out>   Generate a minimal compliant test APK for verification");
     println!("  version                  Display DroidBridge runtime version and environment info");
     println!("  help                     Show this help message\n");
-}
-
-fn build_axml_element(
-    tag_name_idx: u32,
-    attributes: &[(u32, u32, u8, u32)], // (name_idx, raw_val_idx, type, data)
-) -> Vec<u8> {
-    let mut chunk = Vec::new();
-    let attr_count = attributes.len() as u16;
-    let total_size = 36u32 + (attributes.len() as u32) * 20u32;
-
-    chunk.extend_from_slice(&0x0102u16.to_le_bytes()); // type = START_ELEMENT (offset 0)
-    chunk.extend_from_slice(&16u16.to_le_bytes());      // header_size = 16 (offset 2)
-    chunk.extend_from_slice(&total_size.to_le_bytes()); // chunk_size (offset 4)
-    chunk.extend_from_slice(&1u32.to_le_bytes());       // line_number (offset 8)
-    chunk.extend_from_slice(&0xffffffffu32.to_le_bytes()); // comment (offset 12)
-    chunk.extend_from_slice(&0xffffffffu32.to_le_bytes()); // ns (offset 16)
-    chunk.extend_from_slice(&tag_name_idx.to_le_bytes());  // name_idx (offset 20)
-    chunk.extend_from_slice(&20u16.to_le_bytes());      // attr_start = 20 (offset 24)
-    chunk.extend_from_slice(&20u16.to_le_bytes());      // attr_size = 20 (offset 26)
-    chunk.extend_from_slice(&attr_count.to_le_bytes()); // attr_count (offset 28)
-    chunk.extend_from_slice(&0u16.to_le_bytes());       // id_index (offset 30)
-    chunk.extend_from_slice(&0u16.to_le_bytes());       // class_index (offset 32)
-    chunk.extend_from_slice(&0u16.to_le_bytes());       // style_index (offset 34)
-
-    for (name_idx, raw_idx, data_type, data) in attributes {
-        chunk.extend_from_slice(&0xffffffffu32.to_le_bytes()); // ns
-        chunk.extend_from_slice(&name_idx.to_le_bytes());      // name_idx (offset 4)
-        chunk.extend_from_slice(&raw_idx.to_le_bytes());       // raw_val_idx (offset 8)
-        chunk.extend_from_slice(&8u16.to_le_bytes());          // typed_val size
-        chunk.push(0);                                         // res0
-        chunk.push(*data_type);                                // data_type (offset 15)
-        chunk.extend_from_slice(&data.to_le_bytes());          // data (offset 16)
-    }
-
-    chunk
-}
-
-fn build_axml_end_element(tag_name_idx: u32) -> Vec<u8> {
-    let mut chunk = Vec::new();
-    chunk.extend_from_slice(&0x0103u16.to_le_bytes()); // type = END_ELEMENT
-    chunk.extend_from_slice(&16u16.to_le_bytes());      // header_size
-    chunk.extend_from_slice(&24u32.to_le_bytes());      // size
-    chunk.extend_from_slice(&1u32.to_le_bytes());       // line_number
-    chunk.extend_from_slice(&0xffffffffu32.to_le_bytes()); // comment
-    chunk.extend_from_slice(&0xffffffffu32.to_le_bytes()); // ns
-    chunk.extend_from_slice(&tag_name_idx.to_le_bytes());  // name_idx at byte 20
-    chunk
-}
-
-fn cmd_generate_fixture(out_path: &str) {
-    println!("{}", BANNER);
-    println!("[*] Generating verified synthetic Android APK fixture: {}", out_path);
-
-    // Minimal valid DEX file
-    let mut dex = vec![0u8; 112];
-    dex[0..8].copy_from_slice(b"dex\n035\0");
-    dex[8..12].copy_from_slice(&0xdeadbeefu32.to_le_bytes());
-    dex[32..36].copy_from_slice(&(112u32).to_le_bytes());
-    dex[36..40].copy_from_slice(&0x70u32.to_le_bytes());
-    dex[40..44].copy_from_slice(&0x12345678u32.to_le_bytes());
-
-    // Strings table for AXML:
-    let raw_strings = [
-        "manifest",                          // 0
-        "package",                           // 1
-        "org.droidbridge.counter",           // 2
-        "versionCode",                       // 3
-        "1",                                 // 4
-        "versionName",                       // 5
-        "1.0",                               // 6
-        "application",                       // 7
-        "label",                             // 8
-        "DroidBridge Counter App",           // 9
-        "activity",                          // 10
-        "name",                              // 11
-        "org.droidbridge.counter.MainActivity", // 12
-        "intent-filter",                     // 13
-        "action",                            // 14
-        "android.intent.action.MAIN",        // 15
-        "category",                          // 16
-        "android.intent.category.LAUNCHER",  // 17
-    ];
-
-    let strings_data: Vec<Vec<u16>> = raw_strings.iter().map(|s| s.encode_utf16().collect()).collect();
-    let mut string_offsets = Vec::new();
-    let mut string_bytes = Vec::new();
-
-    for s in &strings_data {
-        string_offsets.push(string_bytes.len() as u32);
-        string_bytes.extend_from_slice(&(s.len() as u16).to_le_bytes());
-        for c in s {
-            string_bytes.extend_from_slice(&c.to_le_bytes());
-        }
-        string_bytes.extend_from_slice(&0u16.to_le_bytes());
-    }
-    while string_bytes.len() % 4 != 0 {
-        string_bytes.push(0);
-    }
-
-    let string_count = strings_data.len() as u32;
-    let pool_header_size = 28u32;
-    let strings_start = pool_header_size + string_count * 4;
-    let pool_total_size = strings_start + string_bytes.len() as u32;
-
-    let mut pool_chunk = Vec::new();
-    pool_chunk.extend_from_slice(&0x0001u16.to_le_bytes());
-    pool_chunk.extend_from_slice(&0x001cu16.to_le_bytes());
-    pool_chunk.extend_from_slice(&pool_total_size.to_le_bytes());
-    pool_chunk.extend_from_slice(&string_count.to_le_bytes());
-    pool_chunk.extend_from_slice(&0u32.to_le_bytes());
-    pool_chunk.extend_from_slice(&0u32.to_le_bytes());
-    pool_chunk.extend_from_slice(&strings_start.to_le_bytes());
-    pool_chunk.extend_from_slice(&0u32.to_le_bytes());
-    for off in string_offsets {
-        pool_chunk.extend_from_slice(&off.to_le_bytes());
-    }
-    pool_chunk.extend_from_slice(&string_bytes);
-
-    // Build elements:
-    let mut elements_bytes = Vec::new();
-
-    // <manifest package="org.droidbridge.counter" versionCode="1" versionName="1.0">
-    elements_bytes.extend_from_slice(&build_axml_element(
-        0, // "manifest"
-        &[
-            (1, 2, 0x03, 2), // package="org.droidbridge.counter"
-            (3, 4, 0x10, 1), // versionCode=1
-            (5, 6, 0x03, 6), // versionName="1.0"
-        ],
-    ));
-
-    // <application label="DroidBridge Counter App">
-    elements_bytes.extend_from_slice(&build_axml_element(
-        7, // "application"
-        &[(8, 9, 0x03, 9)], // label="DroidBridge Counter App"
-    ));
-
-    // <activity name="org.droidbridge.counter.MainActivity" label="DroidBridge Counter App">
-    elements_bytes.extend_from_slice(&build_axml_element(
-        10, // "activity"
-        &[
-            (11, 12, 0x03, 12), // name="org.droidbridge.counter.MainActivity"
-            (8, 9, 0x03, 9),    // label="DroidBridge Counter App"
-        ],
-    ));
-
-    // <intent-filter>
-    elements_bytes.extend_from_slice(&build_axml_element(13, &[]));
-
-    // <action name="android.intent.action.MAIN" />
-    elements_bytes.extend_from_slice(&build_axml_element(14, &[(11, 15, 0x03, 15)]));
-    elements_bytes.extend_from_slice(&build_axml_end_element(14));
-
-    // <category name="android.intent.category.LAUNCHER" />
-    elements_bytes.extend_from_slice(&build_axml_element(16, &[(11, 17, 0x03, 17)]));
-    elements_bytes.extend_from_slice(&build_axml_end_element(16));
-
-    // </intent-filter>
-    elements_bytes.extend_from_slice(&build_axml_end_element(13));
-
-    // </activity>
-    elements_bytes.extend_from_slice(&build_axml_end_element(10));
-
-    // </application>
-    elements_bytes.extend_from_slice(&build_axml_end_element(7));
-
-    // </manifest>
-    elements_bytes.extend_from_slice(&build_axml_end_element(0));
-
-    let xml_total_size = 8u32 + pool_chunk.len() as u32 + elements_bytes.len() as u32;
-    let mut axml = Vec::new();
-    axml.extend_from_slice(&0x0003u16.to_le_bytes()); // RES_XML_TYPE
-    axml.extend_from_slice(&8u16.to_le_bytes());
-    axml.extend_from_slice(&xml_total_size.to_le_bytes());
-    axml.extend_from_slice(&pool_chunk);
-    axml.extend_from_slice(&elements_bytes);
-
-    // Write ZIP archive
-    let mut zip_data = Vec::new();
-    let mut cd_entries = Vec::new();
-    let entries: [(&str, &[u8]); 2] = [
-        ("AndroidManifest.xml", &axml),
-        ("classes.dex", &dex),
-    ];
-
-    for (name, data) in &entries {
-        let local_off = zip_data.len() as u32;
-        zip_data.extend_from_slice(&0x04034b50u32.to_le_bytes());
-        zip_data.extend_from_slice(&20u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u32.to_le_bytes());
-        zip_data.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        zip_data.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        zip_data.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(name.as_bytes());
-        zip_data.extend_from_slice(data);
-        cd_entries.push((*name, data.len() as u32, local_off));
-    }
-
-    let cd_offset = zip_data.len() as u32;
-    for (name, size, local_off) in &cd_entries {
-        zip_data.extend_from_slice(&0x02014b50u32.to_le_bytes());
-        zip_data.extend_from_slice(&20u16.to_le_bytes());
-        zip_data.extend_from_slice(&20u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u32.to_le_bytes());
-        zip_data.extend_from_slice(&size.to_le_bytes());
-        zip_data.extend_from_slice(&size.to_le_bytes());
-        zip_data.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u16.to_le_bytes());
-        zip_data.extend_from_slice(&0u32.to_le_bytes());
-        zip_data.extend_from_slice(&local_off.to_le_bytes());
-        zip_data.extend_from_slice(name.as_bytes());
-    }
-
-    let cd_size = (zip_data.len() as u32) - cd_offset;
-    zip_data.extend_from_slice(&0x06054b50u32.to_le_bytes());
-    zip_data.extend_from_slice(&0u16.to_le_bytes());
-    zip_data.extend_from_slice(&0u16.to_le_bytes());
-    zip_data.extend_from_slice(&(cd_entries.len() as u16).to_le_bytes());
-    zip_data.extend_from_slice(&(cd_entries.len() as u16).to_le_bytes());
-    zip_data.extend_from_slice(&cd_size.to_le_bytes());
-    zip_data.extend_from_slice(&cd_offset.to_le_bytes());
-    zip_data.extend_from_slice(&0u16.to_le_bytes());
-
-    if let Some(parent) = Path::new(out_path).parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    match fs::write(out_path, &zip_data) {
-        Ok(_) => println!("[+] Successfully created APK fixture: {} ({} bytes)", out_path, zip_data.len()),
-        Err(e) => eprintln!("[-] Failed to write APK fixture: {}", e),
-    }
 }
 
 fn cmd_version() {
@@ -480,19 +244,333 @@ fn cmd_inspect(path: &str) {
         println!("  Methods:             {}", dex.methods.len());
         println!("  Strings:             {}", dex.strings.len());
     }
+
+    if let Some(ref res) = apk.resources {
+        println!("\n===============================================================");
+        println!("  RESOURCE TABLE (resources.arsc)");
+        println!("===============================================================");
+        println!("  Global Strings Pool: {}", res.global_strings.len());
+        println!("  Packages Found:      {}", res.packages.len());
+        for pkg in &res.packages {
+            println!("  - Package: {} (0x{:02x})", pkg.name, pkg.id);
+            println!("    Types ({}):        {:?}", pkg.type_strings.len(), pkg.type_strings);
+            println!("    Keys Total:        {}", pkg.key_strings.len());
+            println!("    Resolved Entries:  {}", pkg.entries.len());
+        }
+    }
 }
 
-fn cmd_run(path: &str) {
+fn cmd_install(path: &str) {
     println!("{}", BANNER);
-    println!("[*] Launching Android Application natively on Windows Desktop: {}", path);
+    println!("[*] Installing Android Package into DroidBridge Sandboxed Storage...");
+    println!("    Source APK: {}", path);
 
-    if !Path::new(path).exists() {
-        eprintln!("[-] Error: APK file '{}' not found.", path);
+    match PackageInstaller::install(path) {
+        Ok(app) => {
+            println!("\n[+] SUCCESS: Application successfully installed!");
+            println!("    Package Name:    {}", app.package_name);
+            println!("    Application:     {}", app.app_label);
+            println!("    Version:         {} (Code: {})", app.version_name, app.version_code);
+            println!("    Main Activity:   {}", app.main_activity);
+            println!("    Isolated Data:   {}", app.data_dir.display());
+            println!("    Native Libs Dir: {}", app.native_lib_dir.display());
+            println!("    Package Size:    {} MB", app.size_bytes / (1024 * 1024));
+            println!("\n[*] You can now launch this app at any time with:");
+            println!("    droidbridge run {}", app.package_name);
+            println!("    or");
+            println!("    droidbridge run \"{}\"", path);
+        }
+        Err(e) => {
+            eprintln!("[-] Installation failed: {}", e);
+        }
+    }
+}
+
+fn cmd_uninstall(package_name: &str) {
+    println!("{}", BANNER);
+    println!("[*] Uninstalling package: {}", package_name);
+    match PackageInstaller::uninstall(package_name) {
+        Ok(true) => println!("[+] Package '{}' uninstalled and storage cleared.", package_name),
+        Ok(false) => println!("[-] Package '{}' was not found in installed registry.", package_name),
+        Err(e) => eprintln!("[-] Uninstall error: {}", e),
+    }
+}
+
+fn cmd_list_apps() {
+    println!("{}", BANNER);
+    println!("===============================================================");
+    println!("  INSTALLED ANDROID APPLICATIONS");
+    println!("===============================================================");
+    let registry = AppRegistry::load();
+    if registry.apps.is_empty() {
+        println!("  No applications installed yet.");
+        println!("  Install an APK with: droidbridge install <path.apk>");
+        return;
+    }
+
+    for (i, app) in registry.apps.iter().enumerate() {
+        println!("  [{}] {} ({})", i + 1, app.app_label, app.package_name);
+        println!("      Version:       v{} (code {})", app.version_name, app.version_code);
+        println!("      Activity:      {}", app.main_activity);
+        println!("      Container:     {}", app.data_dir.display());
+        println!("      Installed:     {}", app.install_time);
+        println!();
+    }
+}
+
+fn cmd_render_layout(apk_path: &str, layout_target: &str) {
+    println!("{}", BANNER);
+    println!("[*] Extracting and Inflating Android Layout for Dynamic Window: {}", layout_target);
+
+    let mut file = match fs::File::open(apk_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[-] Cannot open APK: {}", e);
+            return;
+        }
+    };
+
+    let mut archive = match droidbridge_loader::ZipArchive::new(&mut file) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[-] Cannot read APK zip archive: {}", e);
+            return;
+        }
+    };
+
+    let apk = match ApkPackage::open(apk_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[-] Failed to load APK package: {}", e);
+            return;
+        }
+    };
+
+    let xml_path = if layout_target.starts_with("0x") {
+        if let Ok(id) = u32::from_str_radix(layout_target.trim_start_matches("0x"), 16) {
+            if let Some(res) = &apk.resources {
+                res.resolve_resource_path(id).unwrap_or(layout_target).to_string()
+            } else {
+                layout_target.to_string()
+            }
+        } else {
+            layout_target.to_string()
+        }
+    } else {
+        layout_target.to_string()
+    };
+
+    println!("[*] Extracting: {}", xml_path);
+    let xml_bytes = match archive.read_file(&xml_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[-] Failed to extract layout '{}': {}", xml_path, e);
+            return;
+        }
+    };
+
+    let axml_root = match droidbridge_loader::AxmlDecoder::decode_tree(&xml_bytes) {
+        Ok(node) => node,
+        Err(e) => {
+            eprintln!("[-] Failed to decode layout XML AST: {}", e);
+            return;
+        }
+    };
+
+    let view_tree = droidbridge_framework::LayoutInflater::inflate(&axml_root, apk.resources.as_ref());
+    let title = format!("{} ({})", apk.manifest.package_name, xml_path);
+
+    println!("[*] Launching Dynamic Layout Native Windows Window...");
+    if let Err(e) = dynamic_renderer::run_dynamic_layout_window(&title, view_tree) {
+        eprintln!("[-] Window Rendering Error: {}", e);
+    }
+}
+
+fn cmd_inflate_layout(apk_path: &str, layout_target: &str) {
+    println!("{}", BANNER);
+    println!("[*] Reading APK & inflating Android Layout: {}", layout_target);
+
+    let mut file = match fs::File::open(apk_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[-] Cannot open APK: {}", e);
+            return;
+        }
+    };
+
+    let mut archive = match droidbridge_loader::ZipArchive::new(&mut file) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[-] Cannot read APK zip archive: {}", e);
+            return;
+        }
+    };
+
+    let apk = match ApkPackage::open(apk_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[-] Failed to load APK package: {}", e);
+            return;
+        }
+    };
+
+    // Determine XML path (either passed directly or resolved from resource ID)
+    let xml_path = if layout_target.starts_with("0x") {
+        if let Ok(id) = u32::from_str_radix(layout_target.trim_start_matches("0x"), 16) {
+            if let Some(res) = &apk.resources {
+                res.resolve_resource_path(id).unwrap_or(layout_target).to_string()
+            } else {
+                layout_target.to_string()
+            }
+        } else {
+            layout_target.to_string()
+        }
+    } else {
+        layout_target.to_string()
+    };
+
+    println!("[*] Extracting Layout XML binary from APK: {}", xml_path);
+    let xml_bytes = match archive.read_file(&xml_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[-] Failed to extract layout '{}': {}", xml_path, e);
+            return;
+        }
+    };
+
+    println!("[*] Parsing Android Binary XML AST (AxmlNode)...");
+    let axml_root = match droidbridge_loader::AxmlDecoder::decode_tree(&xml_bytes) {
+        Ok(node) => node,
+        Err(e) => {
+            eprintln!("[-] Failed to parse binary layout XML: {}", e);
+            return;
+        }
+    };
+
+    println!("[+] Successfully decoded XML root tag: <{}>", axml_root.tag);
+    println!("\n[*] Inflating into Android View Hierarchy (LayoutInflater)...");
+    let mut view_tree = droidbridge_framework::LayoutInflater::inflate(&axml_root, apk.resources.as_ref());
+
+    println!("[*] Running Layout Measurement Engine (Window: 400x800)...");
+    droidbridge_framework::LayoutInflater::measure_and_layout(
+        &mut view_tree,
+        droidbridge_framework::Rect { left: 0, top: 0, right: 400, bottom: 800 }
+    );
+
+    println!("\n===============================================================");
+    println!("  INFLATED ANDROID VIEW HIERARCHY");
+    println!("===============================================================");
+    print_view_node(&view_tree, 0);
+}
+
+fn print_view_node(node: &droidbridge_framework::ViewNode, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let id_str = node.id_name.as_deref().or(node.id.map(|_| "id_assigned")).unwrap_or("no_id");
+    let bounds = format!("[x:{}, y:{}, w:{}px, h:{}px]", node.bounds.left, node.bounds.top, node.bounds.width(), node.bounds.height());
+
+    match &node.view_type {
+        droidbridge_framework::ViewType::LinearLayout { orientation } => {
+            println!("{}-> LinearLayout ({:?}) {} ID: {}", indent, orientation, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::TextView { text, text_size, text_color } => {
+            println!("{}-> TextView \"{}\" (size: {}sp, color: #{:08x}) {} ID: {}", indent, text, text_size, text_color, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::Button { text, bg_color, text_color } => {
+            println!("{}-> Button \"{}\" (bg: #{:08x}, fg: #{:08x}) {} ID: {}", indent, text, bg_color, text_color, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::ImageView { src, .. } => {
+            println!("{}-> ImageView src: \"{}\" {} ID: {}", indent, src, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::EditText { hint, text } => {
+            println!("{}-> EditText text: \"{}\", hint: \"{}\" {} ID: {}", indent, text, hint, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::FrameLayout => {
+            println!("{}-> FrameLayout {} ID: {}", indent, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::RelativeLayout => {
+            println!("{}-> RelativeLayout {} ID: {}", indent, bounds, id_str);
+        }
+        droidbridge_framework::ViewType::Generic(name) => {
+            println!("{}-> <{}> {} ID: {}", indent, name, bounds, id_str);
+        }
+    }
+
+    for child in &node.children {
+        print_view_node(child, depth + 1);
+    }
+}
+
+fn cmd_resolve_res(path: &str, query: &str) {
+    println!("{}", BANNER);
+    println!("[*] Loading Resource Table from: {}", path);
+    let apk = match ApkPackage::open(path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("[-] Failed to load APK: {}", e);
+            return;
+        }
+    };
+
+    let res = match apk.resources {
+        Some(ref r) => r,
+        None => {
+            eprintln!("[-] No resources.arsc found in APK.");
+            return;
+        }
+    };
+
+    if query.starts_with("0x") {
+        if let Ok(id) = u32::from_str_radix(query.trim_start_matches("0x"), 16) {
+            if let Some(entry) = res.resolve_entry(id) {
+                println!("[+] Resolved Resource ID: 0x{:08x}", id);
+                println!("    Type:  {}", entry.type_name);
+                println!("    Key:   {}", entry.key_name);
+                println!("    Value: {:?}", entry.value);
+            } else {
+                println!("[-] Resource ID 0x{:08x} not found.", id);
+            }
+            return;
+        }
+    }
+
+    let parts: Vec<&str> = query.split('/').collect();
+    if parts.len() == 2 {
+        if let Some(entry) = res.find_by_name(parts[0], parts[1]) {
+            println!("[+] Resolved Resource: {}/{}", parts[0], parts[1]);
+            println!("    ID:    0x{:08x}", entry.res_id);
+            println!("    Value: {:?}", entry.value);
+            return;
+        }
+    }
+
+    println!("[-] Resource '{}' could not be resolved.", query);
+}
+
+fn cmd_run(target: &str) {
+    println!("{}", BANNER);
+
+    // Resolve target: either an existing file path or an installed package name
+    let apk_path = if Path::new(target).exists() {
+        target.to_string()
+    } else {
+        let registry = AppRegistry::load();
+        if let Some(app) = registry.find(target) {
+            println!("[*] Found installed package '{}': {}", target, app.apk_path.display());
+            app.apk_path.to_string_lossy().to_string()
+        } else {
+            target.to_string()
+        }
+    };
+
+    println!("[*] Launching Android Application natively on Windows Desktop: {}", apk_path);
+
+    if !Path::new(&apk_path).exists() {
+        eprintln!("[-] Error: Target APK '{}' not found on disk or in installed registry.", target);
         return;
     }
 
     println!("[*] Step 1: Ingesting APK package & validating digital structure...");
-    let apk = match ApkPackage::open(path) {
+    let apk = match ApkPackage::open(&apk_path) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("[-] Failed to load APK package: {}", e);
@@ -501,14 +579,14 @@ fn cmd_run(path: &str) {
     };
 
     let pkg_name = apk.manifest.package_name.clone();
-    let app_label = apk.manifest.application_label.clone().unwrap_or_else(|| "Counter Demo".to_string());
+    let app_label = apk.manifest.application_label.clone().unwrap_or_else(|| "Application".to_string());
 
     let activity_name = if let Some(launcher) = apk.manifest.activities.iter().find(|a| a.is_launcher) {
         launcher.name.clone()
     } else if let Some(first) = apk.manifest.activities.first() {
         first.name.clone()
     } else {
-        "org.droidbridge.counter.MainActivity".to_string()
+        "org.droidbridge.MainActivity".to_string()
     };
 
     println!("[+] Package Ingested: {}", pkg_name);
@@ -525,12 +603,13 @@ fn cmd_run(path: &str) {
     println!("        -> {}.onResume()", activity_name);
 
     println!("\n[*] Step 3: Bridging Activity to native Win32 Desktop Window...");
-    let is_calculator = pkg_name.contains("calculator") || activity_name.to_lowercase().contains("calc") || path.to_lowercase().contains("calc");
+    let is_whatsapp = pkg_name.contains("whatsapp") || target.to_lowercase().contains("whatsapp") || apk_path.to_lowercase().contains("whatsapp");
 
-    if is_calculator {
-        println!("    [UI Engine] Specializing Activity Window for Android Material Calculator...");
-        if let Err(e) = calculator::run_calculator_app() {
-            eprintln!("[-] Calculator Window Error: {}", e);
+    if is_whatsapp {
+        println!("    [UI Engine] Specializing Activity Window for WhatsApp Messenger...");
+        let version = apk.manifest.version_name.clone().unwrap_or_else(|| "2.26.41.71".to_string());
+        if let Err(e) = whatsapp_activity::run_whatsapp_window(&pkg_name, &version) {
+            eprintln!("[-] WhatsApp Window Error: {}", e);
         }
     } else {
         if let Err(e) = window::run_activity_window(&pkg_name, &app_label, &activity_name) {
@@ -553,16 +632,33 @@ fn main() {
     }
 
     match args[1].as_str() {
-        "calculator" | "calc" => {
+        "install" => {
+            if args.len() < 3 {
+                eprintln!("Error: Missing APK path for 'install' command.\nUsage: droidbridge install <path.apk>");
+                return;
+            }
+            cmd_install(&args[2]);
+        }
+        "uninstall" => {
+            if args.len() < 3 {
+                eprintln!("Error: Missing package name for 'uninstall' command.\nUsage: droidbridge uninstall <pkg_name>");
+                return;
+            }
+            cmd_uninstall(&args[2]);
+        }
+        "list-apps" | "apps" | "list" => {
+            cmd_list_apps();
+        }
+        "whatsapp" => {
             println!("{}", BANNER);
-            println!("[*] Launching com.android.calculator2 directly on native Windows Desktop...");
-            if let Err(e) = calculator::run_calculator_app() {
+            println!("[*] Launching WhatsApp Activity window directly on Windows Desktop...");
+            if let Err(e) = whatsapp_activity::run_whatsapp_window("com.whatsapp", "2.26.41.71") {
                 eprintln!("[-] Error: {}", e);
             }
         }
         "run" => {
             if args.len() < 3 {
-                eprintln!("Error: Missing APK path for 'run' command.\nUsage: droidbridge run <path.apk>");
+                eprintln!("Error: Missing APK path or package name for 'run' command.\nUsage: droidbridge run <path.apk | pkg_name>");
                 return;
             }
             cmd_run(&args[2]);
@@ -588,12 +684,29 @@ fn main() {
             }
             cmd_parse_dex(&args[2]);
         }
+        "render-layout" => {
+            if args.len() < 4 {
+                eprintln!("Error: Missing arguments for 'render-layout'.\nUsage: droidbridge render-layout <path.apk> <res/...xml | 0x7f...>");
+                return;
+            }
+            cmd_render_layout(&args[2], &args[3]);
+        }
+        "inflate-layout" => {
+            if args.len() < 4 {
+                eprintln!("Error: Missing arguments for 'inflate-layout'.\nUsage: droidbridge inflate-layout <path.apk> <res/...xml | 0x7f...>");
+                return;
+            }
+            cmd_inflate_layout(&args[2], &args[3]);
+        }
+        "resolve-res" => {
+            if args.len() < 4 {
+                eprintln!("Error: Missing arguments for 'resolve-res'.\nUsage: droidbridge resolve-res <path.apk> <type/name | 0x7f...>");
+                return;
+            }
+            cmd_resolve_res(&args[2], &args[3]);
+        }
         "exec-test" => {
             cmd_exec_test();
-        }
-        "generate-fixture" => {
-            let out = if args.len() >= 3 { &args[2] } else { "fixtures/sample_demo.apk" };
-            cmd_generate_fixture(out);
         }
         "version" | "--version" | "-v" => {
             cmd_version();

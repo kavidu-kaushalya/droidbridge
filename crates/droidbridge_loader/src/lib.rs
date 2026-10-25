@@ -1,3 +1,4 @@
+pub mod arsc;
 pub mod axml;
 pub mod dex;
 pub mod validator;
@@ -6,7 +7,8 @@ pub mod zip;
 use std::fs::File;
 use std::path::Path;
 
-pub use axml::{ActivityManifestInfo, AndroidManifest, AxmlDecoder, AxmlError};
+pub use arsc::{ArscError, ResEntry, ResPackage, ResValue, ResourceTable};
+pub use axml::{ActivityManifestInfo, AndroidManifest, AxmlAttributeValue, AxmlDecoder, AxmlError, AxmlNode};
 pub use dex::{ClassInfo, CodeItem, DexError, DexFile, DexHeader, MethodInfo};
 pub use validator::{ApkCompatibilityReport, CompatibilityValidator, CompatibilityVerdict, NativeLibraryInfo};
 pub use zip::{ZipArchive, ZipEntry, ZipError};
@@ -16,6 +18,7 @@ pub enum ApkLoadError {
     Zip(ZipError),
     Axml(AxmlError),
     Dex(DexError),
+    Arsc(ArscError),
     MissingManifest,
     MissingDex,
 }
@@ -38,12 +41,19 @@ impl From<DexError> for ApkLoadError {
     }
 }
 
+impl From<ArscError> for ApkLoadError {
+    fn from(e: ArscError) -> Self {
+        ApkLoadError::Arsc(e)
+    }
+}
+
 impl std::fmt::Display for ApkLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ApkLoadError::Zip(e) => write!(f, "ZIP error: {}", e),
             ApkLoadError::Axml(e) => write!(f, "AXML error: {}", e),
             ApkLoadError::Dex(e) => write!(f, "DEX error: {}", e),
+            ApkLoadError::Arsc(e) => write!(f, "ARSC error: {}", e),
             ApkLoadError::MissingManifest => write!(f, "APK does not contain AndroidManifest.xml"),
             ApkLoadError::MissingDex => write!(f, "APK does not contain classes.dex"),
         }
@@ -56,6 +66,8 @@ pub struct ApkPackage {
     pub manifest: AndroidManifest,
     pub compatibility: ApkCompatibilityReport,
     pub dex_data: Vec<u8>,
+    pub resources: Option<ResourceTable>,
+    pub arsc_data: Option<Vec<u8>>,
 }
 
 impl ApkPackage {
@@ -78,10 +90,22 @@ impl ApkPackage {
             .read_file("classes.dex")
             .map_err(|_| ApkLoadError::MissingDex)?;
 
+        // Attempt to read resources.arsc if present
+        let mut resources = None;
+        let mut arsc_data = None;
+        if let Ok(arsc_bytes) = archive.read_file("resources.arsc") {
+            if let Ok(parsed_table) = ResourceTable::parse(&arsc_bytes) {
+                resources = Some(parsed_table);
+            }
+            arsc_data = Some(arsc_bytes);
+        }
+
         Ok(Self {
             manifest,
             compatibility,
             dex_data,
+            resources,
+            arsc_data,
         })
     }
 
