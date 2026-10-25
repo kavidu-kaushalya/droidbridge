@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/droidbridge_loader",
+    "crates/droidbridge_core",
+    "crates/droidbridge_cli",
+]
+resolver = "2"

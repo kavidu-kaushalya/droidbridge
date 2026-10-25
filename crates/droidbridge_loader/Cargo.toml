@@ -1,0 +1,9 @@
+[package]
+name = "droidbridge_loader"
+version = "0.1.0"
+edition = "2021"
+authors = ["DroidBridge Systems Engineering Group"]
+description = "APK, Android Binary XML (AXML), and DEX parser and feature validator for DroidBridge"
+
+[dependencies]
+miniz_oxide = "0.8"
