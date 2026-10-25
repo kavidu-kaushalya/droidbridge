@@ -1,3 +1,4 @@
+mod calculator;
 mod window;
 
 use std::env;
@@ -17,6 +18,7 @@ fn print_usage() {
     println!("{}", BANNER);
     println!("Usage: droidbridge <command> [arguments]\n");
     println!("Commands:");
+    println!("  calculator               Directly launch the interactive Android Calculator (com.android.calculator2)");
     println!("  run <path.apk>           Launch Android APK as an interactive native Windows window");
     println!("  inspect <path.apk>       Inspect APK contents, manifest, DEX, and compatibility");
     println!("  parse-dex <path.dex>     Parse and dump DEX header, classes, and method signatures");
@@ -471,8 +473,17 @@ fn cmd_run(path: &str) {
     println!("        -> {}.onResume()", activity_name);
 
     println!("\n[*] Step 3: Bridging Activity to native Win32 Desktop Window...");
-    if let Err(e) = window::run_activity_window(&pkg_name, &app_label, &activity_name) {
-        eprintln!("[-] GUI Error: {}", e);
+    let is_calculator = pkg_name.contains("calculator") || activity_name.to_lowercase().contains("calc") || path.to_lowercase().contains("calc");
+
+    if is_calculator {
+        println!("    [UI Engine] Specializing Activity Window for Android Material Calculator...");
+        if let Err(e) = calculator::run_calculator_app() {
+            eprintln!("[-] Calculator Window Error: {}", e);
+        }
+    } else {
+        if let Err(e) = window::run_activity_window(&pkg_name, &app_label, &activity_name) {
+            eprintln!("[-] GUI Error: {}", e);
+        }
     }
 
     println!("\n[*] Step 4: Activity Lifecycle shutdown:");
@@ -490,6 +501,13 @@ fn main() {
     }
 
     match args[1].as_str() {
+        "calculator" | "calc" => {
+            println!("{}", BANNER);
+            println!("[*] Launching com.android.calculator2 directly on native Windows Desktop...");
+            if let Err(e) = calculator::run_calculator_app() {
+                eprintln!("[-] Error: {}", e);
+            }
+        }
         "run" => {
             if args.len() < 3 {
                 eprintln!("Error: Missing APK path for 'run' command.\nUsage: droidbridge run <path.apk>");
