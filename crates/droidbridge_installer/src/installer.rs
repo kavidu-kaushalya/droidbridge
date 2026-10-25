@@ -16,7 +16,19 @@ impl PackageInstaller {
         let apk = ApkPackage::open(apk_p).map_err(|e| format!("Invalid APK package: {}", e))?;
 
         let package_name = apk.manifest.package_name.clone();
-        let app_label = apk.manifest.application_label.clone().unwrap_or_else(|| package_name.clone());
+        let app_label = if let Some(ref raw_label) = apk.manifest.application_label {
+            if let Ok(res_id) = raw_label.parse::<u32>() {
+                if let Some(ref res) = apk.resources {
+                    res.resolve_string(res_id).unwrap_or(raw_label).to_string()
+                } else {
+                    raw_label.clone()
+                }
+            } else {
+                raw_label.clone()
+            }
+        } else {
+            package_name.clone()
+        };
         let version_name = apk.manifest.version_name.clone().unwrap_or_else(|| "1.0".to_string());
         let version_code = apk.manifest.version_code.unwrap_or(1);
 

@@ -142,7 +142,18 @@ impl LayoutInflater {
                 text = Self::resolve_text(&root.attributes, "contentDescription", resources);
             }
             if text.is_empty() {
-                text = "Continue".to_string();
+                if let Some(AxmlAttributeValue::String(ref id_s)) = Self::get_attr(&root.attributes, "id") {
+                    if id_s.contains("eula") || id_s.contains("agree") || id_s.contains("accept") {
+                        text = "Agree and Continue".to_string();
+                    } else if id_s.contains("cancel") || id_s.contains("dismiss") {
+                        text = "Cancel".to_string();
+                    } else if id_s.contains("next") || id_s.contains("continue") {
+                        text = "Next".to_string();
+                    }
+                }
+            }
+            if text.is_empty() {
+                text = "Agree and Continue".to_string();
             }
             let bg_color = Self::resolve_color(&root.attributes, "background", resources).unwrap_or(0xff25d366); // WhatsApp Green #25D366
             let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
@@ -251,9 +262,29 @@ impl LayoutInflater {
                     return s.clone();
                 }
                 AxmlAttributeValue::Reference(r) => {
+                    if (*r & 0xff000000) == 0x01000000 {
+                        match *r {
+                            0x0104000a => return "OK".to_string(),
+                            0x01040000 => return "Cancel".to_string(),
+                            0x01040009 => return "Yes".to_string(),
+                            0x01040006 => return "No".to_string(),
+                            0x0104000e => return "Continue".to_string(),
+                            _ => {}
+                        }
+                    }
                     if let Some(res) = resources {
                         if let Some(s) = res.resolve_string(*r) {
                             return s.to_string();
+                        }
+                    }
+                }
+                AxmlAttributeValue::Integer(i) => {
+                    let r = *i as u32;
+                    if (r & 0xff000000) == 0x7f000000 || (r & 0xff000000) == 0x01000000 {
+                        if let Some(res) = resources {
+                            if let Some(s) = res.resolve_string(r) {
+                                return s.to_string();
+                            }
                         }
                     }
                 }

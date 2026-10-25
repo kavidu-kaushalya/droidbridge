@@ -64,6 +64,7 @@ pub struct AndroidManifest {
 pub struct AxmlDecoder<'a> {
     data: &'a [u8],
     strings: Vec<String>,
+    res_map: Vec<u32>,
 }
 
 impl<'a> AxmlDecoder<'a> {
@@ -80,6 +81,7 @@ impl<'a> AxmlDecoder<'a> {
         let mut decoder = Self {
             data,
             strings: Vec::new(),
+            res_map: Vec::new(),
         };
         decoder.parse()
     }
@@ -269,6 +271,7 @@ impl<'a> AxmlDecoder<'a> {
         let mut decoder = Self {
             data,
             strings: Vec::new(),
+            res_map: Vec::new(),
         };
         decoder.parse_tree()
     }
@@ -299,6 +302,17 @@ impl<'a> AxmlDecoder<'a> {
                 Self::RES_STRING_POOL_TYPE => {
                     self.parse_string_pool(&self.data[offset..offset + chunk_size])?;
                 }
+                Self::RES_XML_RESOURCE_MAP_TYPE => {
+                    let sub = &self.data[offset..offset + chunk_size];
+                    let count = (chunk_size.saturating_sub(8)) / 4;
+                    for i in 0..count {
+                        if 8 + i * 4 + 4 <= sub.len() {
+                            if let Ok(id) = Self::read_u32(sub, 8 + i * 4) {
+                                self.res_map.push(id);
+                            }
+                        }
+                    }
+                }
                 Self::RES_XML_START_ELEMENT_TYPE => {
                     let element_slice = &self.data[offset..offset + chunk_size];
                     let name_idx = Self::read_u32(element_slice, 20)? as usize;
@@ -316,7 +330,27 @@ impl<'a> AxmlDecoder<'a> {
                             let a_type = element_slice[a_off + 15];
                             let a_data = Self::read_u32(element_slice, a_off + 16)?;
 
-                            let attr_name = self.get_string(a_name_idx).unwrap_or("").to_string();
+                            let mut attr_name = self.get_string(a_name_idx).unwrap_or("").to_string();
+                            if (attr_name.is_empty() || attr_name.starts_with("attr_")) && a_name_idx < self.res_map.len() {
+                                let res_id = self.res_map[a_name_idx];
+                                attr_name = match res_id {
+                                    0x0101014f => "text".to_string(),
+                                    0x01010153 => "textSize".to_string(),
+                                    0x01010098 => "textColor".to_string(),
+                                    0x010100d0 => "id".to_string(),
+                                    0x010100f2 => "layout_width".to_string(),
+                                    0x010100f3 => "layout_height".to_string(),
+                                    0x010100d4 => "background".to_string(),
+                                    0x01010119 => "src".to_string(),
+                                    0x01010150 => "hint".to_string(),
+                                    0x010100c4 => "orientation".to_string(),
+                                    0x010101e1 => "contentDescription".to_string(),
+                                    0x01010181 => "padding".to_string(),
+                                    0x010100f6 => "layout_margin".to_string(),
+                                    0x01010129 => "gravity".to_string(),
+                                    _ => attr_name,
+                                };
+                            }
                             let attr_val = if a_raw_idx >= 0 {
                                 AxmlAttributeValue::String(self.get_string(a_raw_idx as usize).unwrap_or("").to_string())
                             } else {

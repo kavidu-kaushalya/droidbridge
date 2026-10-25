@@ -610,7 +610,9 @@ fn cmd_run(target: &str) {
 
     println!("\n[*] Step 3: Bridging Activity to native Win32 Desktop Window...");
     if let Ok(view_tree) = view_tree_res {
-        println!("    [UI Engine] Launching Real Android View Hierarchy Desktop Window...");
+        println!("    [UI Engine] Inflated Android View Tree Hierarchy:");
+        print_view_node(&view_tree, 2);
+        println!("\n    [UI Engine] Launching Real Android View Hierarchy Desktop Window...");
         if let Err(e) = dynamic_renderer::run_dynamic_layout_window(&app_label, view_tree) {
             eprintln!("[-] Dynamic Layout Window Error: {}", e);
         }

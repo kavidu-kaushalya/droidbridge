@@ -11,21 +11,53 @@ pub struct ActivityThread {
     pub layout_invocations: Vec<u32>,
 }
 
-fn score_layout_node(node: &droidbridge_loader::AxmlNode) -> (usize, usize) {
-    let is_interactive = node.tag.ends_with("Button")
-        || node.tag.ends_with("TextView")
-        || node.tag.ends_with("EditText")
-        || node.tag.ends_with("ImageView")
-        || node.tag.contains("Button")
-        || node.tag.contains("Text");
-    let mut inter = if is_interactive { 1 } else { 0 };
-    let mut total = 1;
-    for child in &node.children {
-        let (c_inter, c_tot) = score_layout_node(child);
-        inter += c_inter;
-        total += c_tot;
+#[derive(Default, Debug, Clone)]
+struct LayoutMetrics {
+    total_nodes: usize,
+    buttons: usize,
+    text_views: usize,
+    edit_texts: usize,
+    image_views: usize,
+}
+
+fn analyze_layout(node: &droidbridge_loader::AxmlNode, m: &mut LayoutMetrics) {
+    m.total_nodes += 1;
+    let tag = &node.tag;
+    if tag.ends_with("Button") || tag.ends_with(".WDSButton") || tag.contains("Button") {
+        m.buttons += 1;
+    } else if tag.ends_with("TextView") || tag.contains("TextView") {
+        m.text_views += 1;
+    } else if tag.ends_with("EditText") || tag.contains("EditText") {
+        m.edit_texts += 1;
+    } else if tag.ends_with("ImageView") || tag.contains("ImageView") {
+        m.image_views += 1;
     }
-    (inter, total)
+    for child in &node.children {
+        analyze_layout(child, m);
+    }
+}
+
+fn compute_layout_score(m: &LayoutMetrics, xml_path: &str) -> usize {
+    let mut score = m.total_nodes * 2
+        + m.buttons * 20
+        + m.text_views * 15
+        + m.edit_texts * 25
+        + m.image_views * 10;
+
+    // Screens with both descriptive text and actionable buttons are full user interfaces
+    if m.buttons > 0 && m.text_views > 0 {
+        score += 80;
+    }
+    if m.buttons > 0 && m.edit_texts > 0 {
+        score += 70;
+    }
+    if m.total_nodes >= 4 {
+        score += 30;
+    }
+    if xml_path.contains("eula") || xml_path.contains("welcome") || xml_path.contains("register") || xml_path.contains("main") {
+        score += 100;
+    }
+    score
 }
 
 impl ActivityThread {
@@ -149,22 +181,17 @@ impl ActivityThread {
                         for (id, xml_path) in layout_candidates {
                             if let Ok(bytes) = zip.read_file(xml_path) {
                                 if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
-                                    let (interactive, total) = score_layout_node(&node);
-                                    let score = interactive * 10 + total;
+                                    let mut metrics = LayoutMetrics::default();
+                                    analyze_layout(&node, &mut metrics);
+                                    let score = compute_layout_score(&metrics, xml_path);
 
-                                    if score >= 35 {
-                                        best_candidate = Some((*id, xml_path.clone(), node, score));
-                                        break;
-                                    } else if score > best_candidate.as_ref().map(|b| b.3).unwrap_or(0) {
+                                    if score > best_candidate.as_ref().map(|b| b.3).unwrap_or(0) {
                                         best_candidate = Some((*id, xml_path.clone(), node, score));
                                     }
                                 }
                             }
                         }
                     }
-                }
-                if best_candidate.as_ref().map(|b| b.3 >= 35).unwrap_or(false) {
-                    break;
                 }
             }
 
