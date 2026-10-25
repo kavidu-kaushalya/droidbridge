@@ -1,6 +1,7 @@
 pub mod arsc;
 pub mod axml;
 pub mod dex;
+pub mod multidex;
 pub mod validator;
 pub mod zip;
 
@@ -10,6 +11,7 @@ use std::path::Path;
 pub use arsc::{ArscError, ResEntry, ResPackage, ResValue, ResourceTable};
 pub use axml::{ActivityManifestInfo, AndroidManifest, AxmlAttributeValue, AxmlDecoder, AxmlError, AxmlNode};
 pub use dex::{ClassInfo, CodeItem, DexError, DexFile, DexHeader, MethodInfo};
+pub use multidex::MultiDexArchive;
 pub use validator::{ApkCompatibilityReport, CompatibilityValidator, CompatibilityVerdict, NativeLibraryInfo};
 pub use zip::{ZipArchive, ZipEntry, ZipError};
 
@@ -68,6 +70,7 @@ pub struct ApkPackage {
     pub dex_data: Vec<u8>,
     pub resources: Option<ResourceTable>,
     pub arsc_data: Option<Vec<u8>>,
+    pub multidex: Option<MultiDexArchive>,
 }
 
 impl ApkPackage {
@@ -100,12 +103,16 @@ impl ApkPackage {
             arsc_data = Some(arsc_bytes);
         }
 
+        // Multi-DEX loading across all classes*.dex
+        let multidex = MultiDexArchive::load_from_zip(&mut archive).ok();
+
         Ok(Self {
             manifest,
             compatibility,
             dex_data,
             resources,
             arsc_data,
+            multidex,
         })
     }
 

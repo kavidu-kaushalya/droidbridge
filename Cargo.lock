@@ -27,6 +27,7 @@ version = "0.1.0"
 name = "droidbridge_framework"
 version = "0.1.0"
 dependencies = [
+ "droidbridge_core",
  "droidbridge_loader",
 ]
 

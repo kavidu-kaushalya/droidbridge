@@ -7,3 +7,4 @@ description = "Android Framework API compatibility layer (Context, Activity, Int
 
 [dependencies]
 droidbridge_loader = { path = "../droidbridge_loader" }
+droidbridge_core = { path = "../droidbridge_core" }

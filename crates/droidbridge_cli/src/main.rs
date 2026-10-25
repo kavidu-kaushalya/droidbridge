@@ -595,12 +595,8 @@ fn cmd_run(target: &str) {
     println!("    Compatibility:     {:?}", apk.compatibility.verdict);
 
     println!("\n[*] Step 2: Initializing DroidBridge Android Framework Subsystem...");
-    println!("    [android.app.ActivityThread] Attaching application context...");
-    println!("    [android.app.LoadedApk] Loading classes.dex ({} bytes)...", apk.dex_data.len());
-    println!("    [android.app.Instrumentation] Executing Activity lifecycle callbacks:");
-    println!("        -> {}.onCreate(savedInstanceState: null)", activity_name);
-    println!("        -> {}.onStart()", activity_name);
-    println!("        -> {}.onResume()", activity_name);
+    let mut thread = droidbridge_framework::ActivityThread::new(&pkg_name, &apk_path);
+    let view_tree_res = thread.launch_activity(&activity_name, &apk);
 
     println!("\n[*] Step 3: Bridging Activity to native Win32 Desktop Window...");
     let is_whatsapp = pkg_name.contains("whatsapp") || target.to_lowercase().contains("whatsapp") || apk_path.to_lowercase().contains("whatsapp");
@@ -610,6 +606,11 @@ fn cmd_run(target: &str) {
         let version = apk.manifest.version_name.clone().unwrap_or_else(|| "2.26.41.71".to_string());
         if let Err(e) = whatsapp_activity::run_whatsapp_window(&pkg_name, &version) {
             eprintln!("[-] WhatsApp Window Error: {}", e);
+        }
+    } else if let Ok(view_tree) = view_tree_res {
+        println!("    [UI Engine] Launching Dynamic Layout Native Desktop Window...");
+        if let Err(e) = dynamic_renderer::run_dynamic_layout_window(&app_label, view_tree) {
+            eprintln!("[-] Dynamic Layout Window Error: {}", e);
         }
     } else {
         if let Err(e) = window::run_activity_window(&pkg_name, &app_label, &activity_name) {

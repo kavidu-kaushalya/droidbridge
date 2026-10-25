@@ -3,7 +3,9 @@ pub mod intent;
 pub mod logger;
 pub mod shared_prefs;
 pub mod view;
+pub mod activity_thread;
 
+pub use activity_thread::ActivityThread;
 pub use bundle::{Bundle, BundleValue};
 pub use intent::Intent;
 pub use logger::{Log, LogPriority};
