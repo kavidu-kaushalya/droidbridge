@@ -122,10 +122,16 @@ extern "system" {
     fn DrawTextW(hdc: HDC, lpch_text: *const u16, cch_text: i32, lprc: *mut RECT, format: u32) -> i32;
     fn RoundRect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) -> i32;
     fn LoadCursorW(h_instance: HINSTANCE, lp_cursor_name: *const u16) -> HCURSOR;
+    fn SetForegroundWindow(h_wnd: HWND) -> i32;
+    fn BringWindowToTop(h_wnd: HWND) -> i32;
+    fn GetSystemMetrics(n_index: i32) -> i32;
 }
 
 const WS_OVERLAPPEDWINDOW: u32 = 0x00CF0000;
+const WS_VISIBLE: u32 = 0x10000000;
 const SW_SHOWNORMAL: i32 = 1;
+const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
 const WM_DESTROY: u32 = 0x0002;
 const WM_PAINT: u32 = 0x000F;
 const WM_LBUTTONUP: u32 = 0x0202;
@@ -368,15 +374,20 @@ pub fn run_activity_window(
             return Err("Failed to register Win32 Window Class".to_string());
         }
 
-        let width = 560;
-        let height = 460;
+        let width = 600;
+        let height = 500;
+        let screen_w = GetSystemMetrics(SM_CXSCREEN);
+        let screen_h = GetSystemMetrics(SM_CYSCREEN);
+        let pos_x = (screen_w - width) / 2;
+        let pos_y = (screen_h - height) / 2;
+
         let hwnd = CreateWindowExW(
             0,
             class_name.as_ptr(),
             window_title.as_ptr(),
-            WS_OVERLAPPEDWINDOW,
-            150,
-            150,
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            pos_x,
+            pos_y,
             width,
             height,
             null_mut(),
@@ -397,18 +408,20 @@ pub fn run_activity_window(
                 counter: 0,
                 vm: DexVm::new(),
                 button_rect: RECT {
-                    left: 55,
-                    top: 270,
-                    right: width - 75,
-                    bottom: 325,
+                    left: 60,
+                    top: 290,
+                    right: width - 80,
+                    bottom: 350,
                 },
             });
         });
 
         println!("\n[+] Win32 Window successfully created (HWND: {:?})", hwnd);
-        println!("[*] Displaying Activity window on Windows Desktop...");
+        println!("[*] Displaying Activity window centered on Windows Desktop ({}x{} at {}, {})...", width, height, pos_x, pos_y);
 
         ShowWindow(hwnd, SW_SHOWNORMAL);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
         UpdateWindow(hwnd);
 
         // Standard Win32 Message Loop
