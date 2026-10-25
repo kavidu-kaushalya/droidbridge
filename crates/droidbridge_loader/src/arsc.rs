@@ -192,6 +192,14 @@ impl ResourceTable {
                     format!("type_{}", type_id)
                 };
 
+                // Inspect configuration: default/any or English vs localized overrides
+                let is_default_or_en = if sub.len() >= 30 {
+                    let lang = [sub[28], sub[29]];
+                    lang == [0, 0] || &lang == b"en"
+                } else {
+                    true
+                };
+
                 let offsets_start = c_header_size;
                 for i in 0..entry_count {
                     let off_pos = offsets_start + i * 4;
@@ -249,15 +257,41 @@ impl ResourceTable {
                             _ => ResValue::Raw { data_type, data: val_data },
                         };
 
-                        let entry = ResEntry {
-                            res_id,
-                            type_name: type_name.clone(),
-                            key_name: key_name.clone(),
-                            value: res_val,
+                        let should_insert = match package.entries.get(&res_id) {
+                            None => true,
+                            Some(existing) => {
+                                match (&existing.value, &res_val) {
+                                    (ResValue::String(old_s), ResValue::String(new_s)) => {
+                                        let old_is_ascii = !old_s.is_empty() && old_s.is_ascii();
+                                        let new_is_ascii = !new_s.is_empty() && new_s.is_ascii();
+                                        if is_default_or_en && !old_is_ascii {
+                                            true
+                                        } else if !is_default_or_en && old_is_ascii {
+                                            false
+                                        } else if new_is_ascii && !old_is_ascii {
+                                            true
+                                        } else if !new_is_ascii && old_is_ascii {
+                                            false
+                                        } else {
+                                            is_default_or_en
+                                        }
+                                    }
+                                    _ => is_default_or_en,
+                                }
+                            }
                         };
 
-                        package.name_to_id.insert(format!("{}/{}", type_name, key_name), res_id);
-                        package.entries.insert(res_id, entry);
+                        if should_insert {
+                            let entry = ResEntry {
+                                res_id,
+                                type_name: type_name.clone(),
+                                key_name: key_name.clone(),
+                                value: res_val,
+                            };
+
+                            package.name_to_id.insert(format!("{}/{}", type_name, key_name), res_id);
+                            package.entries.insert(res_id, entry);
+                        }
                     }
                 }
             }

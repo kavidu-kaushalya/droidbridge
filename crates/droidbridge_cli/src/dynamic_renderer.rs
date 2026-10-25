@@ -484,16 +484,34 @@ unsafe fn render_view_node(hdc: HDC, node: &ViewNode) {
                 render_view_node(hdc, child);
             }
             if node.children.is_empty() {
-                let font = CreateFontW(
-                    14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 2, 0,
-                    to_wide_chars("Segoe UI").as_ptr(),
-                );
-                SelectObject(hdc, font as *mut c_void);
-                SetTextColor(hdc, 0x00999999);
-                let mut tr = r;
-                let text_wide = to_wide_chars(&format!("<{}>", tag));
-                DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DeleteObject(font as *mut c_void);
+                if tag.contains("Lottie") || tag.contains("Animation") {
+                    let brush = CreateSolidBrush(0x0033281E);
+                    SelectObject(hdc, brush as *mut c_void);
+                    RoundRect(hdc, r.left, r.top, r.right, r.bottom, 12, 12);
+                    DeleteObject(brush as *mut c_void);
+
+                    let font = CreateFontW(
+                        15, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 2, 0,
+                        to_wide_chars("Segoe UI").as_ptr(),
+                    );
+                    SelectObject(hdc, font as *mut c_void);
+                    SetTextColor(hdc, 0x0078DE25);
+                    let mut tr = r;
+                    let text_wide = to_wide_chars("[Animation Preview: Lottie View]");
+                    DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DeleteObject(font as *mut c_void);
+                } else if !tag.ends_with("Space") && tag != "View" {
+                    let font = CreateFontW(
+                        14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 2, 0,
+                        to_wide_chars("Segoe UI").as_ptr(),
+                    );
+                    SelectObject(hdc, font as *mut c_void);
+                    SetTextColor(hdc, 0x00999999);
+                    let mut tr = r;
+                    let text_wide = to_wide_chars(&format!("<{}>", tag));
+                    DrawTextW(hdc, text_wide.as_ptr(), -1, &mut tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    DeleteObject(font as *mut c_void);
+                }
             }
         }
     }

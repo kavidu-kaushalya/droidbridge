@@ -366,6 +366,83 @@ impl LayoutInflater {
                     }
                 }
             }
+            ViewType::FrameLayout => {
+                for child in &mut root.children {
+                    let w = match child.layout_params.width {
+                        SizeRule::Exact(px) => px,
+                        SizeRule::MatchParent => (inner_right - inner_left).max(0),
+                        SizeRule::WrapContent => (inner_right - inner_left).max(0),
+                    };
+                    let h = match child.layout_params.height {
+                        SizeRule::Exact(px) => px,
+                        SizeRule::MatchParent => (inner_bottom - inner_top).max(0),
+                        SizeRule::WrapContent => (inner_bottom - inner_top).max(0).min(200),
+                    };
+                    let child_rect = Rect {
+                        left: inner_left + child.layout_params.margin.left,
+                        top: inner_top + child.layout_params.margin.top,
+                        right: (inner_left + w - child.layout_params.margin.right).max(inner_left),
+                        bottom: (inner_top + h - child.layout_params.margin.bottom).max(inner_top),
+                    };
+                    Self::measure_and_layout(child, child_rect);
+                }
+            }
+            ViewType::RelativeLayout | ViewType::Generic(_) => {
+                let count = root.children.len();
+                if count == 0 {
+                    return;
+                }
+                if count == 1 {
+                    let child = &mut root.children[0];
+                    let w = match child.layout_params.width {
+                        SizeRule::Exact(px) => px,
+                        _ => (inner_right - inner_left).max(0),
+                    };
+                    let h = match child.layout_params.height {
+                        SizeRule::Exact(px) => px,
+                        _ => (inner_bottom - inner_top).max(0),
+                    };
+                    let child_rect = Rect {
+                        left: inner_left + child.layout_params.margin.left,
+                        top: inner_top + child.layout_params.margin.top,
+                        right: (inner_left + w - child.layout_params.margin.right).max(inner_left),
+                        bottom: (inner_top + h - child.layout_params.margin.bottom).max(inner_top),
+                    };
+                    Self::measure_and_layout(child, child_rect);
+                } else {
+                    let total_available_h = (inner_bottom - inner_top).max(0);
+                    let mut current_y = inner_top;
+
+                    for child in &mut root.children {
+                        let h = match child.layout_params.height {
+                            SizeRule::Exact(px) => px,
+                            SizeRule::MatchParent => (total_available_h / (count as i32)).max(40),
+                            SizeRule::WrapContent => match &child.view_type {
+                                ViewType::Button { .. } => 50,
+                                ViewType::TextView { .. } => 36,
+                                ViewType::EditText { .. } => 48,
+                                ViewType::ImageView { .. } => 120,
+                                _ => 50,
+                            },
+                        };
+
+                        let w = match child.layout_params.width {
+                            SizeRule::Exact(px) => px,
+                            _ => (inner_right - inner_left).max(0),
+                        };
+
+                        let child_rect = Rect {
+                            left: inner_left + child.layout_params.margin.left,
+                            top: current_y + child.layout_params.margin.top,
+                            right: (inner_left + w - child.layout_params.margin.right).max(inner_left),
+                            bottom: (current_y + h - child.layout_params.margin.bottom).max(current_y),
+                        };
+
+                        Self::measure_and_layout(child, child_rect);
+                        current_y += h + child.layout_params.margin.top + child.layout_params.margin.bottom + 8;
+                    }
+                }
+            }
             _ => {
                 // Leaf view bounds already assigned
             }

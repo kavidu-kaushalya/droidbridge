@@ -11,6 +11,23 @@ pub struct ActivityThread {
     pub layout_invocations: Vec<u32>,
 }
 
+fn score_layout_node(node: &droidbridge_loader::AxmlNode) -> (usize, usize) {
+    let is_interactive = node.tag.ends_with("Button")
+        || node.tag.ends_with("TextView")
+        || node.tag.ends_with("EditText")
+        || node.tag.ends_with("ImageView")
+        || node.tag.contains("Button")
+        || node.tag.contains("Text");
+    let mut inter = if is_interactive { 1 } else { 0 };
+    let mut total = 1;
+    for child in &node.children {
+        let (c_inter, c_tot) = score_layout_node(child);
+        inter += c_inter;
+        total += c_tot;
+    }
+    (inter, total)
+}
+
 impl ActivityThread {
     pub fn new(package_name: &str, apk_path: &str) -> Self {
         let mut thread = Self {
@@ -108,9 +125,11 @@ impl ActivityThread {
             println!("[-] Class '{}' not found in DEX index; falling back to manifest entry.", activity_class_name);
         }
 
-        // 2. Inflate layout: Look for candidate layouts from resources.arsc
+        // 2. Inflate layout: Select the richest candidate layout from resources.arsc
         let mut final_view_tree = None;
         if let Some(ref res) = apk.resources {
+            let mut best_candidate: Option<(u32, String, droidbridge_loader::AxmlNode, usize)> = None;
+
             for pkg in &res.packages {
                 let mut layout_candidates: Vec<(&u32, &String)> = pkg.entries.iter()
                     .filter(|(_, e)| e.type_name == "layout")
@@ -125,29 +144,38 @@ impl ActivityThread {
 
                 layout_candidates.sort_by_key(|(id, _)| **id);
 
-                for (id, xml_path) in layout_candidates {
-                    if let Ok(mut f) = File::open(&self.apk_path) {
-                        if let Ok(mut zip) = ZipArchive::new(&mut f) {
+                if let Ok(mut f) = File::open(&self.apk_path) {
+                    if let Ok(mut zip) = ZipArchive::new(&mut f) {
+                        for (id, xml_path) in layout_candidates {
                             if let Ok(bytes) = zip.read_file(xml_path) {
                                 if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
-                                    if !node.children.is_empty() || node.tag.contains("Layout") {
-                                        println!("[*] Selected Android layout: 0x{:08x} ({}) tag: <{}> (children: {})", id, xml_path, node.tag, node.children.len());
-                                        let mut view = LayoutInflater::inflate(&node, Some(res));
-                                        LayoutInflater::measure_and_layout(
-                                            &mut view,
-                                            Rect { left: 0, top: 0, right: 420, bottom: 720 },
-                                        );
-                                        final_view_tree = Some(view);
+                                    let (interactive, total) = score_layout_node(&node);
+                                    let score = interactive * 10 + total;
+
+                                    if score >= 35 {
+                                        best_candidate = Some((*id, xml_path.clone(), node, score));
                                         break;
+                                    } else if score > best_candidate.as_ref().map(|b| b.3).unwrap_or(0) {
+                                        best_candidate = Some((*id, xml_path.clone(), node, score));
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if final_view_tree.is_some() {
+                if best_candidate.as_ref().map(|b| b.3 >= 35).unwrap_or(false) {
                     break;
                 }
+            }
+
+            if let Some((id, xml_path, node, score)) = best_candidate {
+                println!("[*] Selected Android Layout: 0x{:08x} ({}) tag: <{}> (Richness Score: {}, Direct Children: {})", id, xml_path, node.tag, score, node.children.len());
+                let mut view = LayoutInflater::inflate(&node, Some(res));
+                LayoutInflater::measure_and_layout(
+                    &mut view,
+                    Rect { left: 0, top: 0, right: 420, bottom: 720 },
+                );
+                final_view_tree = Some(view);
             }
         }
 
