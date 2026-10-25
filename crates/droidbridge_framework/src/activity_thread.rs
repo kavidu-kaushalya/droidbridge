@@ -108,27 +108,37 @@ impl ActivityThread {
             println!("[-] Class '{}' not found in DEX index; falling back to manifest entry.", activity_class_name);
         }
 
-        // 2. Inflate layout: Try to find a default layout from resources.arsc or synthesize root
+        // 2. Inflate layout: Look for candidate layouts from resources.arsc
         let mut final_view_tree = None;
         if let Some(ref res) = apk.resources {
             for pkg in &res.packages {
-                // Find first layout resource
-                for (id, entry) in &pkg.entries {
-                    if entry.type_name == "layout" {
-                        if let droidbridge_loader::ResValue::String(ref xml_path) = entry.value {
-                            println!("[*] Auto-inflating primary layout from resources: 0x{:08x} ({})", id, xml_path);
-                            if let Ok(mut f) = File::open(&self.apk_path) {
-                                if let Ok(mut zip) = ZipArchive::new(&mut f) {
-                                    if let Ok(bytes) = zip.read_file(xml_path) {
-                                        if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
-                                            let mut view = LayoutInflater::inflate(&node, Some(res));
-                                            LayoutInflater::measure_and_layout(
-                                                &mut view,
-                                                Rect { left: 0, top: 0, right: 420, bottom: 720 },
-                                            );
-                                            final_view_tree = Some(view);
-                                            break;
-                                        }
+                let mut layout_candidates: Vec<(&u32, &String)> = pkg.entries.iter()
+                    .filter(|(_, e)| e.type_name == "layout")
+                    .filter_map(|(id, e)| {
+                        if let droidbridge_loader::ResValue::String(ref path) = e.value {
+                            Some((id, path))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                layout_candidates.sort_by_key(|(id, _)| **id);
+
+                for (id, xml_path) in layout_candidates {
+                    if let Ok(mut f) = File::open(&self.apk_path) {
+                        if let Ok(mut zip) = ZipArchive::new(&mut f) {
+                            if let Ok(bytes) = zip.read_file(xml_path) {
+                                if let Ok(node) = droidbridge_loader::AxmlDecoder::decode_tree(&bytes) {
+                                    if !node.children.is_empty() || node.tag.contains("Layout") {
+                                        println!("[*] Selected Android layout: 0x{:08x} ({}) tag: <{}> (children: {})", id, xml_path, node.tag, node.children.len());
+                                        let mut view = LayoutInflater::inflate(&node, Some(res));
+                                        LayoutInflater::measure_and_layout(
+                                            &mut view,
+                                            Rect { left: 0, top: 0, right: 420, bottom: 720 },
+                                        );
+                                        final_view_tree = Some(view);
+                                        break;
                                     }
                                 }
                             }

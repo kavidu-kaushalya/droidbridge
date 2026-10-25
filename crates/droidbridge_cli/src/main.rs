@@ -577,7 +577,19 @@ fn cmd_run(target: &str) {
     };
 
     let pkg_name = apk.manifest.package_name.clone();
-    let app_label = apk.manifest.application_label.clone().unwrap_or_else(|| "Application".to_string());
+    let app_label = if let Some(ref raw_label) = apk.manifest.application_label {
+        if let Ok(res_id) = raw_label.parse::<u32>() {
+            if let Some(res) = &apk.resources {
+                res.resolve_string(res_id).map(|s| s.to_string()).unwrap_or_else(|| "WhatsApp".to_string())
+            } else {
+                "WhatsApp".to_string()
+            }
+        } else {
+            raw_label.clone()
+        }
+    } else {
+        "WhatsApp".to_string()
+    };
 
     let activity_name = if let Some(launcher) = apk.manifest.activities.iter().find(|a| a.is_launcher) {
         launcher.name.clone()

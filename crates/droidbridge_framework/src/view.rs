@@ -128,55 +128,58 @@ impl LayoutInflater {
         }
 
         // View Type Specialization
-        let view_type = match tag {
-            "LinearLayout" => {
-                let mut orientation = Orientation::Vertical;
-                if let Some(AxmlAttributeValue::String(s)) = Self::get_attr(&root.attributes, "orientation") {
-                    if s == "horizontal" || s == "0" {
-                        orientation = Orientation::Horizontal;
-                    }
+        let view_type = if tag == "LinearLayout" || tag.ends_with(".LinearLayout") {
+            let mut orientation = Orientation::Vertical;
+            if let Some(AxmlAttributeValue::String(s)) = Self::get_attr(&root.attributes, "orientation") {
+                if s == "horizontal" || s == "0" {
+                    orientation = Orientation::Horizontal;
                 }
-                ViewType::LinearLayout { orientation }
             }
-            "TextView" => {
-                let text = Self::resolve_text(&root.attributes, "text", resources);
-                let text_size = Self::resolve_float(&root.attributes, "textSize").unwrap_or(14.0);
-                let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
-                ViewType::TextView { text, text_size, text_color }
+            ViewType::LinearLayout { orientation }
+        } else if tag == "Button" || tag.ends_with("Button") || tag.ends_with(".WDSButton") {
+            let mut text = Self::resolve_text(&root.attributes, "text", resources);
+            if text.is_empty() {
+                text = Self::resolve_text(&root.attributes, "contentDescription", resources);
             }
-            "Button" => {
-                let text = Self::resolve_text(&root.attributes, "text", resources);
-                let bg_color = Self::resolve_color(&root.attributes, "background", resources).unwrap_or(0xff075e54);
-                let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
-                ViewType::Button { text, bg_color, text_color }
+            if text.is_empty() {
+                text = "Continue".to_string();
             }
-            "ImageView" => {
-                let mut src = String::new();
-                let mut res_id = None;
-                if let Some(val) = Self::get_attr(&root.attributes, "src") {
-                    match val {
-                        AxmlAttributeValue::String(s) => src = s.clone(),
-                        AxmlAttributeValue::Reference(r) => {
-                            res_id = Some(*r);
-                            if let Some(res) = resources {
-                                if let Some(path) = res.resolve_resource_path(*r) {
-                                    src = path.to_string();
-                                }
+            let bg_color = Self::resolve_color(&root.attributes, "background", resources).unwrap_or(0xff25d366); // WhatsApp Green #25D366
+            let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
+            ViewType::Button { text, bg_color, text_color }
+        } else if tag == "TextView" || tag.ends_with("TextView") {
+            let text = Self::resolve_text(&root.attributes, "text", resources);
+            let text_size = Self::resolve_float(&root.attributes, "textSize").unwrap_or(15.0);
+            let text_color = Self::resolve_color(&root.attributes, "textColor", resources).unwrap_or(0xffffffff);
+            ViewType::TextView { text, text_size, text_color }
+        } else if tag == "ImageView" || tag.ends_with("ImageView") {
+            let mut src = String::new();
+            let mut res_id = None;
+            if let Some(val) = Self::get_attr(&root.attributes, "src") {
+                match val {
+                    AxmlAttributeValue::String(s) => src = s.clone(),
+                    AxmlAttributeValue::Reference(r) => {
+                        res_id = Some(*r);
+                        if let Some(res) = resources {
+                            if let Some(path) = res.resolve_resource_path(*r) {
+                                src = path.to_string();
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
-                ViewType::ImageView { src, res_id }
             }
-            "EditText" => {
-                let hint = Self::resolve_text(&root.attributes, "hint", resources);
-                let text = Self::resolve_text(&root.attributes, "text", resources);
-                ViewType::EditText { hint, text }
-            }
-            "FrameLayout" => ViewType::FrameLayout,
-            "RelativeLayout" => ViewType::RelativeLayout,
-            other => ViewType::Generic(other.to_string()),
+            ViewType::ImageView { src, res_id }
+        } else if tag == "EditText" || tag.ends_with("EditText") {
+            let hint = Self::resolve_text(&root.attributes, "hint", resources);
+            let text = Self::resolve_text(&root.attributes, "text", resources);
+            ViewType::EditText { hint, text }
+        } else if tag == "FrameLayout" || tag.ends_with(".FrameLayout") {
+            ViewType::FrameLayout
+        } else if tag == "RelativeLayout" || tag.ends_with(".RelativeLayout") {
+            ViewType::RelativeLayout
+        } else {
+            ViewType::Generic(tag.to_string())
         };
 
         let mut children = Vec::new();
